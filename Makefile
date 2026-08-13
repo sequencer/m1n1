@@ -172,6 +172,7 @@ OBJECTS := \
 	proxy.o \
 	ringbuffer.o \
 	rtkit.o \
+	sapt.o \
 	sart.o \
 	sep.o \
 	sio.o \
