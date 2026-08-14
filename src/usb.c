@@ -67,6 +67,18 @@ static bool usb_is_initialized = false;
 #define USB2PHY_MISCTUNE_APBCLK_GATE_OFF BIT(29)
 #define USB2PHY_MISCTUNE_REFCLK_GATE_OFF BIT(30)
 
+static bool usb_device_mode_disabled(u32 idx)
+{
+    char path[sizeof(FMT_DRD_PATH)];
+
+    snprintf(path, sizeof(path), FMT_DRD_PATH, idx);
+    int node = adt_path_offset(adt, path);
+    if (node < 0)
+        return false;
+
+    return adt_get_property(adt, node, "usb-device-disable") != NULL;
+}
+
 #define PIPEHANDLER_MUX_CTRL             0x0c
 #define PIPEHANDLER_MUX_CTRL_USB3        0x08
 #define PIPEHANDLER_MUX_CTRL_USB4_TUNNEL 0x11
@@ -153,6 +165,10 @@ int usb_phy_bringup(u32 idx)
     if (idx >= USB_IODEV_COUNT)
         return -1;
 
+    // The J773 front-port hub prohibits device mode.
+    if (usb_device_mode_disabled(idx))
+        return -1;
+
     struct usb_drd_regs usb_regs;
     if (usb_drd_get_regs(idx, &usb_regs) < 0)
         return -1;
@@ -185,6 +201,9 @@ int usb_phy_bringup(u32 idx)
 
 dwc3_dev_t *usb_iodev_bringup(u32 idx)
 {
+    if (usb_device_mode_disabled(idx))
+        return NULL;
+
     dart_dev_t *usb_dart = usb_dart_init(idx);
     if (!usb_dart)
         return NULL;
