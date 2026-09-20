@@ -2141,6 +2141,12 @@ class HV(Reloadable):
                 0xd53ef0a0: 0xaa0,  # mrs S3_6_C15_C0_5
             })
 
+            # XNU must see the guest's RO region, not the firmware's physical bounds.
+            hvc_sysregs.update({
+                sysreg_opcode(True, 3, 0, 11, 1, 2): 0xac0,
+                sysreg_opcode(True, 3, 0, 11, 1, 3): 0xae0,
+            })
+
             # NOP writes to guarded impdef and SME control registers.
             nop_msr = [
                 0xd51cf100,   # msr KERNKEYLO_EL1   (s3_4_c15_c1_0)

@@ -136,6 +136,12 @@ static bool sptm_handle_shadow_hvc(struct exc_info *ctx, u32 immediate)
     if (immediate >= 0xa40 && immediate < 0xac0)
         return hv_handle_objc_bp_hvc(ctx, immediate);
 
+    if (immediate >= 0xac0 && immediate < 0xb00) {
+        if (rt != 31)
+            ctx->regs[rt] = sptm.rorgn[(immediate - 0xac0) >> 5];
+        return true;
+    }
+
     return false;
 }
 

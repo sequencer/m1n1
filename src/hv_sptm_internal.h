@@ -393,6 +393,7 @@ struct sptm_state {
     u64 scratch_pa;
     u64 kernel_root;
     u64 panic_state_pa;
+    u64 rorgn[2];
     u64 amx_version_pa;
     u64 cpu_capabilities_pa;
     u64 frame_table_pa;

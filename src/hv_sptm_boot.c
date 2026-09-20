@@ -42,6 +42,7 @@
 #define MACHO_MAGIC_64      0xfeedfacf
 #define MACHO_LC_SEGMENT_64 0x19
 #define MACHO_LC_UNIXTHREAD 0x05
+#define MACHO_VM_PROT_READ  1
 #define MACHO_VM_PROT_WRITE 2
 #define MACHO_VM_PROT_EXEC  4
 
@@ -126,6 +127,7 @@ struct sptm_boot_context {
     u64 kernel_pa;
     u64 kernel_vmin;
     u64 kernel_vmax;
+    u64 kernel_ro_end;
     u64 kernel_entry;
     u64 ttbr0_pa;
     u64 ttbr1_pa;
@@ -326,17 +328,24 @@ static void sptm_boot_macho_info(struct sptm_boot_context *context)
     assert(header->magic == MACHO_MAGIC_64);
     const struct macho_command *command = (const void *)(header + 1);
     context->kernel_vmin = UINT64_MAX;
+    context->kernel_ro_end = UINT64_MAX;
     for (u32 index = 0; index < header->command_count; index++) {
         if (command->type == MACHO_LC_SEGMENT_64) {
             const struct macho_segment_64 *segment = (const void *)command;
             context->kernel_vmin = min(context->kernel_vmin, segment->vm_address);
             context->kernel_vmax =
                 max(context->kernel_vmax, segment->vm_address + segment->vm_size);
+            // RORGN covers the leading RO segments, not LINKEDIT beyond writable data.
+            if (segment->vm_size && segment->initial_protection != MACHO_VM_PROT_READ)
+                context->kernel_ro_end = min(context->kernel_ro_end, segment->vm_address);
         } else if (command->type == MACHO_LC_UNIXTHREAD) {
             context->kernel_entry = ((const struct macho_thread_64 *)command)->pc;
         }
         command = (const void *)command + command->size;
     }
+    assert(context->kernel_ro_end > context->kernel_vmin &&
+           context->kernel_ro_end <= context->kernel_vmax &&
+           !(context->kernel_ro_end & SPTM_PAGE_MASK));
 }
 
 static void sptm_boot_type_kernel_frames(struct sptm_boot_context *context)
@@ -705,6 +714,9 @@ u64 sptm_boot_init(u64 guest_adt, u64 cons_ops, u64 page_shift_const, u64 xnu_te
 
     hv_sptm_configure(context.managed_start, context.managed_end, context.physmap_base,
                       context.scratch_pa, context.ttbr1_pa, context.cpu_map_pa);
+    // XNU reads these bounds from S3_0_C11_C1_{2,3}; the upper bound is a 4K page base.
+    sptm.rorgn[0] = context.kernel_pa;
+    sptm.rorgn[1] = context.kernel_pa + context.kernel_ro_end - context.kernel_vmin - SZ_4K;
     if (amx_version && cpu_capabilities)
         hv_sptm_configure_amx_policy(context.kernel_pa + amx_version - context.kernel_vmin,
                                      context.kernel_pa + cpu_capabilities - context.kernel_vmin);
