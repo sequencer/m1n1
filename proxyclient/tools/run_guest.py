@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 import argparse
+import json
 import pathlib
 import sys
 import traceback
@@ -37,6 +38,60 @@ def sptm_hv_boot_args(extra=()):
             words.append(arg)
     return " ".join(words)
 
+
+def decode_profile_value(spec):
+    if not isinstance(spec, dict) or set(spec) != {"encoding", "value"}:
+        raise ValueError("profile properties require exactly encoding and value")
+    encoding = spec["encoding"]
+    value = spec["value"]
+    if encoding == "string" and isinstance(value, str):
+        return value
+    if encoding == "integer" and isinstance(value, int):
+        return value
+    if encoding == "hex" and isinstance(value, str):
+        return bytes.fromhex(value)
+    raise ValueError(f"unsupported profile property encoding {encoding!r}")
+
+
+def apply_guest_profile(hv, path):
+    with path.open() as stream:
+        profile = json.load(stream)
+    if profile.get("schema") != 1:
+        raise ValueError("guest profile schema must be 1")
+    chip_id = hv.adt["/chosen"].chip_id
+    if profile.get("chip_id") != chip_id:
+        raise ValueError(
+            f"guest profile chip_id {profile.get('chip_id')!r} does not match {chip_id:#x}"
+        )
+    source_boot_uuid = hv.adt["/chosen"].boot_uuid
+    if profile.get("expected_source_boot_uuid") != source_boot_uuid:
+        raise ValueError("guest profile expected_source_boot_uuid does not match the live stub")
+    nodes = profile.get("nodes")
+    if not isinstance(nodes, dict):
+        raise ValueError("guest profile nodes must be an object")
+    chosen = nodes.get("/chosen", {})
+    required = {
+        "apfs-preboot-uuid",
+        "boot-manifest-hash",
+        "boot-objects-path",
+        "boot-uuid",
+        "root-snapshot-name",
+        "system-volume-auth-blob",
+    }
+    missing = required - set(chosen)
+    if missing:
+        raise ValueError(f"guest profile lacks required /chosen properties: {sorted(missing)}")
+    target_boot_uuid = decode_profile_value(chosen["boot-uuid"])
+    if target_boot_uuid == source_boot_uuid:
+        raise ValueError("guest profile still targets the live stub boot UUID")
+    for node_path, properties in nodes.items():
+        node = hv.adt[node_path]
+        for name, spec in properties.items():
+            setattr(node, name.replace("-", "_"), decode_profile_value(spec))
+    print(f"Applied guest profile for boot UUID {hv.adt['/chosen'].boot_uuid} from {path}")
+    return profile
+
+
 parser = argparse.ArgumentParser(description='Run a Mach-O payload under the hypervisor')
 parser.add_argument('-s', '--symbols', type=pathlib.Path)
 parser.add_argument('-m', '--script', type=pathlib.Path, action='append', default=[])
@@ -54,6 +109,10 @@ parser.add_argument('--strip-node', action="append", default=[], metavar='SUBSTR
 parser.add_argument('-r', '--raw', action="store_true")
 parser.add_argument('-E', '--entry-point', action="store", type=int, help="Entry point for the raw image", default=0x800)
 parser.add_argument('-a', '--append-payload', type=pathlib.Path, action="append", default=[])
+parser.add_argument('--guest-profile', type=pathlib.Path,
+                    help='Apply a validated machine-local ADT profile before serializing the guest tree.')
+parser.add_argument('--guest-memory-gib', type=int,
+                    help='Limit memory exposed to the guest after loading its Mach-O image.')
 parser.add_argument('-v', '--volume', type=volumespec, action='append',
                     help='Attach a 9P virtio device for file export to the guest. The argument is a host path to the '
                          'exported tree, joined by colon (\':\') with a tag under which the tree will be advertised '
@@ -64,6 +123,7 @@ args = parser.parse_args()
 
 from m1n1.proxy import *
 from m1n1.proxyutils import *
+from m1n1.tgtypes import BootArgs_r1, BootArgs_r2, BootArgs_r3
 from m1n1.utils import *
 from m1n1.shell import run_shell
 from m1n1.sysreg import *
@@ -88,6 +148,11 @@ hv = HV(iface, p, u, verbose=args.verbose)
 hv.hook_exceptions = args.hook_exceptions
 
 hv.init()
+
+guest_profile = None
+if args.guest_profile:
+    guest_profile = apply_guest_profile(hv, args.guest_profile)
+    args.guest_memory_gib = args.guest_memory_gib or guest_profile.get("guest_memory_gib")
 
 if args.cpus:
     avail = [i.name for i in hv.adt["/cpus"]]
@@ -164,6 +229,30 @@ if args.raw:
     hv.load_raw(payload.read(), args.entry_point)
 else:
     hv.load_macho(payload, symfile=symfile)
+
+if args.guest_memory_gib is not None:
+    if args.guest_memory_gib <= 0:
+        raise ValueError("guest memory must be positive")
+    original_memory_size = hv.tba.mem_size
+    requested_memory_size = args.guest_memory_gib * 1024 ** 3
+    if requested_memory_size > original_memory_size:
+        raise ValueError("guest memory limit exceeds available guest memory")
+    hv.tba.mem_size = requested_memory_size
+    hv.tba.mem_size_actual = requested_memory_size
+    if hv.tba.revision <= 1:
+        bootargs_type = BootArgs_r1
+    elif hv.tba.revision == 2:
+        bootargs_type = BootArgs_r2
+    elif hv.tba.revision == 3:
+        bootargs_type = BootArgs_r3
+    else:
+        raise ValueError(f"unsupported boot args revision {hv.tba.revision}")
+    bootargs_address = hv.guest_base + hv.bootargs_off
+    hv.iface.writemem(bootargs_address, bootargs_type.build(hv.tba))
+    serialized_bootargs = hv.iface.readstruct(bootargs_address, bootargs_type)
+    if serialized_bootargs.mem_size != requested_memory_size:
+        raise ValueError("serialized guest memory limit did not match the profile")
+    print(f"Limited guest memory to {args.guest_memory_gib} GiB")
 
 if not args.raw and not u.cpu_features.apple_sysregs_unlocked:
     sptm_symbols = tuple(
