@@ -5,7 +5,7 @@
 #include "adt.h"
 #include "xnuboot.h"
 
-#define SPTM_AUX_SIZE              (64 * SZ_1M)
+#define SPTM_AUX_SIZE              (128 * SZ_1M)
 #define SPTM_CPU_STACK_WINDOW_SIZE SZ_1M
 #define SPTM_BOOT_MAX_TABLES       2048
 #define SPTM_BOOTSTRAP_SIZE        0x358
