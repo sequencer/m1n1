@@ -1322,7 +1322,7 @@ class HV(Reloadable):
         if (
             self.exc_reason == START.HV
             and self.exc_code == HV_EVENT.XNU_PANIC
-            and not self.ctx.regs[0]
+            and self.ctx.regs[0] < (1 << 32)
         ):
             # The panic wrapper moves the format string and va_list to x2/x3.
             xnutools.decode_panic(self.u, self.ctx.regs[2], self.ctx.regs[3])

@@ -71,6 +71,12 @@ static bool sptm_handle_xnu_panic_begin(struct exc_info *ctx)
 static bool sptm_handle_dispatch(struct exc_info *ctx)
 {
     u64 dispatch = ctx->regs[16];
+
+    if (dispatch == (2ULL << 56)) {
+        ctx->regs[0] = SPTM_STATUS_SUCCESS;
+        return true;
+    }
+
     u32 domain = (dispatch >> 48) & 0xff;
     u32 table = (dispatch >> 32) & 0xff;
     u32 endpoint = dispatch;

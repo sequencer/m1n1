@@ -335,6 +335,10 @@ static void sptm_init_sart(void)
 {
     int path[8];
     int node = adt_path_offset_trace(adt, "/arm-io/sart-ans", path);
+    if (node < 0) {
+        printf("SPTM: skipping absent SART controller\n");
+        return;
+    }
     u64 base, canary_base = 0;
     adt_get_reg(adt, path, "reg", 0, &base, NULL);
     adt_get_reg(adt, path, "reg", 1, &canary_base, NULL);
@@ -351,6 +355,10 @@ static void sptm_init_nvme(struct sptm_init_allocator *allocator)
 {
     int ans_path[8];
     int ans = adt_path_offset_trace(adt, "/arm-io/ans", ans_path);
+    if (ans < 0) {
+        printf("SPTM: skipping absent NVMe controller\n");
+        return;
+    }
     int defaults = adt_path_offset(adt, "/defaults");
     int carveouts = adt_path_offset(adt, "/chosen/carveout-memory-map");
     u64 main_bar, queue_bar;
