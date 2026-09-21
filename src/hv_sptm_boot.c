@@ -7,8 +7,10 @@
 
 #define SPTM_AUX_SIZE              (64 * SZ_1M)
 #define SPTM_CPU_STACK_WINDOW_SIZE SZ_1M
-#define SPTM_BOOT_MAX_TABLES       1024
-#define SPTM_BOOTSTRAP_SIZE        0x340
+#define SPTM_BOOT_MAX_TABLES       2048
+#define SPTM_BOOTSTRAP_SIZE        0x358
+#define SPTM_BOOTSTRAP_MAGIC       0xd00f000000000000ULL
+#define SPTM_BOOTSTRAP_ARM_LARGE_MEMORY BIT(4)
 #define SPTM_FRAME_ENTRY_SIZE      16
 #define SPTM_FRAME_PARAM_SIZE      0x90
 #define SPTM_VM_MAX_KERNEL_ADDRESS 0xfffffecfffffffffULL
@@ -117,6 +119,77 @@ struct sptm_boot_papt {
     u32 count;
     u32 reserved;
 } PACKED;
+
+struct sptm_libsptm_state_v10 {
+    u64 version;
+    u64 papt_count;
+    u64 papt_ranges;
+    u64 managed_start;
+    u64 managed_end;
+    u64 physmap_base;
+    u64 physmap_end;
+    u64 ttbr1;
+    u64 frame_table;
+    u64 frame_params;
+    u64 pt_attrs;
+    u8 reserved_058[0x28];
+    u64 panic_owner;
+    u64 trace_buffer;
+    u64 dispatch_states;
+    u64 cpu_count;
+    u64 saved_states;
+    u64 saved_state_stride;
+    u8 reserved_0b0[0x10];
+    u64 io_ranges;
+    u64 io_range_count;
+    u64 panic_domain;
+    u64 event_counters;
+    u8 reserved_0e0[0x68];
+} PACKED;
+
+struct sptm_bootstrap_macos_27 {
+    u64 magic;
+    u64 physmap_base;
+    u64 physmap_end;
+    u64 aux_end;
+    u8 reserved_020[0x10];
+    u64 txm_stack_array;
+    u32 cpu_count;
+    u32 reserved_03c;
+    u64 kernel_stacks_start;
+    u64 kernel_stacks_end;
+    u64 kernel_vmin;
+    u64 kernel_vmax;
+    u64 debug_header;
+    u32 max_asids;
+    u8 random_seed_tag[8];
+    u8 random_seed[256];
+    u8 reserved_174[4];
+    u64 random_seed_size;
+    u8 reserved_180[0x18];
+    u64 panic_state;
+    struct sptm_libsptm_state_v10 libsptm;
+    u64 kernel_vmax_no_auxkc;
+    u8 reserved_2f0[0x40];
+    u64 io_ranges;
+    u32 io_range_count;
+    u32 reserved_33c;
+    u64 io_filters;
+    u32 io_filter_count;
+    u32 reserved_34c;
+    u64 feature_flags;
+} PACKED;
+
+static_assert(sizeof(struct sptm_libsptm_state_v10) == 0x148,
+              "unexpected libsptm state size");
+static_assert(offsetof(struct sptm_bootstrap_macos_27, libsptm) == 0x1a0,
+              "unexpected libsptm state offset");
+static_assert(offsetof(struct sptm_bootstrap_macos_27, io_ranges) == 0x330,
+              "unexpected I/O ranges offset");
+static_assert(offsetof(struct sptm_bootstrap_macos_27, feature_flags) == 0x350,
+              "unexpected feature-flags offset");
+static_assert(sizeof(struct sptm_bootstrap_macos_27) == SPTM_BOOTSTRAP_SIZE,
+              "unexpected macOS 27 bootstrap size");
 
 struct sptm_boot_context {
     struct sptm_boot_allocator allocator;
@@ -462,7 +535,9 @@ u64 sptm_boot_init(u64 guest_adt, u64 cons_ops, u64 page_shift_const, u64 xnu_te
     size_t frame_table_size = managed_pages * SPTM_FRAME_ENTRY_SIZE;
     size_t external_ref_table_size = managed_pages * 8;
 
-    context.bootstrap_pa = (u64)sptm_boot_alloc_zero(&context.allocator, SPTM_BOOTSTRAP_SIZE, 16);
+    struct sptm_bootstrap_macos_27 *bootstrap =
+        sptm_boot_alloc_zero(&context.allocator, sizeof(*bootstrap), 16);
+    context.bootstrap_pa = (u64)bootstrap;
     u64 debug_header_pa = (u64)sptm_boot_alloc_zero(&context.allocator, 0x100, 16);
     context.panic_state_pa =
         (u64)sptm_boot_alloc_zero(&context.allocator, SPTM_PAGE_SIZE, SPTM_PAGE_SIZE);
@@ -645,57 +720,57 @@ u64 sptm_boot_init(u64 guest_adt, u64 cons_ops, u64 page_shift_const, u64 xnu_te
     // G15+ UAT exposes the firmware-shared L2 through top-level slot 2.
     write64(context.uat_global_root_pa + 2 * sizeof(u64), context.uat_l2_pa | SPTM_TABLE_DESC);
 
-    // arm_init copies this one-shot cold-entry record before using its pointers.
-    u8 *bootstrap = (void *)context.bootstrap_pa;
-    write64((u64)bootstrap + 0x00, sptm_boot_va(&context, context.scratch_pa));
-    write64((u64)bootstrap + 0x08, context.physmap_base);
-    write64((u64)bootstrap + 0x10, context.physmap_end);
-    write64((u64)bootstrap + 0x18, aux_end);
-    write64((u64)bootstrap + 0x30, sptm_boot_va(&context, txm_stack_array_pa));
-    write32((u64)bootstrap + 0x38, cpu_count);
-    write64((u64)bootstrap + 0x40, sptm_boot_va(&context, kernel_stacks_pa));
-    write64((u64)bootstrap + 0x48,
-            sptm_boot_va(&context, kernel_stacks_pa + SPTM_CPU_STACK_WINDOW_SIZE));
-    write64((u64)bootstrap + 0x50, context.kernel_vmin);
-    write64((u64)bootstrap + 0x58, context.kernel_vmax);
-    write64((u64)bootstrap + 0x60, sptm_boot_va(&context, debug_header_pa));
-    write32((u64)bootstrap + 0x68, sptm_boot_adt_integer(defaults, "pmap-max-asids", 256));
-    memcpy(bootstrap + 0x6c, "randseed", 8);
-    memcpy(bootstrap + 0x74, adt_getprop(adt, chosen, "random-seed", NULL), 256);
-    write64((u64)bootstrap + 0x178, 0x108);
-    write64((u64)bootstrap + 0x198, sptm_boot_va(&context, context.panic_state_pa));
+    // arm_init copies this one-shot macOS 27 cold-entry record before using its pointers.
+    bootstrap->magic = SPTM_BOOTSTRAP_MAGIC;
+    bootstrap->physmap_base = context.physmap_base;
+    bootstrap->physmap_end = context.physmap_end;
+    bootstrap->aux_end = aux_end;
+    bootstrap->txm_stack_array = sptm_boot_va(&context, txm_stack_array_pa);
+    bootstrap->cpu_count = cpu_count;
+    bootstrap->kernel_stacks_start = sptm_boot_va(&context, kernel_stacks_pa);
+    bootstrap->kernel_stacks_end =
+        sptm_boot_va(&context, kernel_stacks_pa + SPTM_CPU_STACK_WINDOW_SIZE);
+    bootstrap->kernel_vmin = context.kernel_vmin;
+    bootstrap->kernel_vmax = context.kernel_vmax;
+    bootstrap->debug_header = sptm_boot_va(&context, debug_header_pa);
+    bootstrap->max_asids = sptm_boot_adt_integer(defaults, "pmap-max-asids", 256);
+    memcpy(bootstrap->random_seed_tag, "randseed", sizeof(bootstrap->random_seed_tag));
+    memcpy(bootstrap->random_seed, adt_getprop(adt, chosen, "random-seed", NULL),
+           sizeof(bootstrap->random_seed));
+    bootstrap->random_seed_size = 0x108;
+    bootstrap->panic_state = sptm_boot_va(&context, context.panic_state_pa);
 
     // The nested libsptm state becomes XNU's persistent SPTM client state.
-    u64 libsptm = (u64)bootstrap + 0x1a0;
-    write64(libsptm + 0x00, 10);
-    write64(libsptm + 0x08, sptm_boot_va(&context, papt_count_pa));
-    write64(libsptm + 0x10, sptm_boot_va(&context, papt_ranges_pa));
-    write64(libsptm + 0x18, context.managed_start);
-    write64(libsptm + 0x20, context.managed_end);
-    write64(libsptm + 0x28, context.physmap_base);
-    write64(libsptm + 0x30, context.physmap_end);
-    write64(libsptm + 0x38, context.ttbr1_pa);
-    write64(libsptm + 0x40, sptm_boot_va(&context, context.frame_table_pa));
-    write64(libsptm + 0x48, sptm_boot_va(&context, frame_params_pa));
-    write64(libsptm + 0x50, sptm_boot_va(&context, pt_attrs_pa));
-    write64(libsptm + 0x80, sptm_boot_va(&context, context.panic_state_pa + 8));
-    write64(libsptm + 0x88, sptm_boot_va(&context, trace_buffer_pa));
-    write64(libsptm + 0x90, sptm_boot_va(&context, dispatch_states_pa));
-    write64(libsptm + 0x98, cpu_count);
-    write64(libsptm + 0xa0, sptm_boot_va(&context, saved_states_pa));
-    write64(libsptm + 0xa8, 8);
+    struct sptm_libsptm_state_v10 *libsptm = &bootstrap->libsptm;
+    libsptm->version = 10;
+    libsptm->papt_count = sptm_boot_va(&context, papt_count_pa);
+    libsptm->papt_ranges = sptm_boot_va(&context, papt_ranges_pa);
+    libsptm->managed_start = context.managed_start;
+    libsptm->managed_end = context.managed_end;
+    libsptm->physmap_base = context.physmap_base;
+    libsptm->physmap_end = context.physmap_end;
+    libsptm->ttbr1 = context.ttbr1_pa;
+    libsptm->frame_table = sptm_boot_va(&context, context.frame_table_pa);
+    libsptm->frame_params = sptm_boot_va(&context, frame_params_pa);
+    libsptm->pt_attrs = sptm_boot_va(&context, pt_attrs_pa);
+    libsptm->panic_owner = sptm_boot_va(&context, context.panic_state_pa + 8);
+    libsptm->trace_buffer = sptm_boot_va(&context, trace_buffer_pa);
+    libsptm->dispatch_states = sptm_boot_va(&context, dispatch_states_pa);
+    libsptm->cpu_count = cpu_count;
+    libsptm->saved_states = sptm_boot_va(&context, saved_states_pa);
+    libsptm->saved_state_stride = 8;
     // Early boot and persistent libsptm state each need their own I/O-range copy.
-    write64(libsptm + 0xc0, sptm_boot_va(&context, (u64)io_ranges));
-    write64(libsptm + 0xc8, io_range_count);
-    write64(libsptm + 0xd0, sptm_boot_va(&context, context.panic_state_pa + 12));
-    write64(libsptm + 0xd8, sptm_boot_va(&context, event_counters_pa));
+    libsptm->io_ranges = sptm_boot_va(&context, (u64)io_ranges);
+    libsptm->io_range_count = io_range_count;
+    libsptm->panic_domain = sptm_boot_va(&context, context.panic_state_pa + 12);
+    libsptm->event_counters = sptm_boot_va(&context, event_counters_pa);
     // With no AuxKC, XNU still needs this value to derive the kernelcache bounds.
-    write64((u64)bootstrap + 0x2e8, context.kernel_vmax);
-    write64((u64)bootstrap + 0x318, sptm_boot_va(&context, (u64)io_ranges));
-    write32((u64)bootstrap + 0x320, io_range_count);
-    write64((u64)bootstrap + 0x328, sptm_boot_va(&context, (u64)io_filters));
-    write32((u64)bootstrap + 0x330, io_filter_count);
-    write64((u64)bootstrap + 0x338, 0x10);
+    bootstrap->kernel_vmax_no_auxkc = context.kernel_vmax;
+    bootstrap->io_ranges = sptm_boot_va(&context, (u64)io_ranges);
+    bootstrap->io_range_count = io_range_count;
+    bootstrap->io_filters = sptm_boot_va(&context, (u64)io_filters);
+    bootstrap->io_filter_count = io_filter_count;
+    bootstrap->feature_flags = SPTM_BOOTSTRAP_ARM_LARGE_MEMORY;
 
     // Start with no panicking CPU/domain and the cold-boot dispatch states XNU expects.
     write16(context.panic_state_pa + 8, 0xffff);
