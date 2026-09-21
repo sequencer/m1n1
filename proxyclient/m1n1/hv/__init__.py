@@ -776,7 +776,7 @@ class HV(Reloadable):
 
     def handle_hvc(self, ctx):
         idx = ctx.esr.ISS
-        if self.sptm is not None and (
+        if self.sptm_symbols is not None and (
             idx <= 4 or 0x1c0 <= idx < 0x280 or 0x400 <= idx < 0xac0
         ):
             return False

@@ -78,6 +78,16 @@ bool sptm_handle_xnu_bootstrap(struct exc_info *ctx, u32 endpoint)
         case 49: /* REG_SNAPSHOT */
             ctx->regs[0] = SPTM_STATUS_SUCCESS;
             return true;
+        case 50: { /* CPU_SCRATCH */
+            u32 logical_id = ctx->regs[0];
+            if (logical_id >= sptm.max_cpus)
+                return false;
+            u64 scratch_pa = sptm.scratch_pa + logical_id * SPTM_PAGE_SIZE;
+            if (!sptm_valid_pa(scratch_pa, SPTM_PAGE_SIZE))
+                return false;
+            ctx->regs[0] = sptm.physmap_base + scratch_pa - sptm.managed_start;
+            return true;
+        }
         case 12: /* CONFIGURE_ROOT */
             ctx->regs[0] = SPTM_STATUS_SUCCESS;
             return true;
