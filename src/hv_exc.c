@@ -650,6 +650,21 @@ bool hv_handle_objc_bp_hvc(struct exc_info *ctx, u32 immediate)
     return true;
 }
 
+/* macOS 27 26A428 sampling routine: each address below contains the matching MRS.
+ * These retain the host proxy's physical-register reads, without a USB round trip.
+ * Register purposes beyond this sampling routine have not been established.
+ */
+#define SYS_PMGR_SAMPLE_C8_2  sys_reg(3, 7, 15, 8, 2)  /* 0xfffffe0009fa3f94 */
+#define SYS_PMGR_SAMPLE_C4_6  sys_reg(3, 7, 15, 4, 6)  /* 0xfffffe0009fa3fa0 */
+#define SYS_PMGR_SAMPLE_C2_2  sys_reg(3, 7, 15, 2, 2)  /* 0xfffffe0009fa3fa8 */
+#define SYS_PMGR_SAMPLE_C6_2  sys_reg(3, 7, 15, 6, 2)  /* 0xfffffe0009fa3fb0 */
+#define SYS_PMGR_SAMPLE_C10_2 sys_reg(3, 7, 15, 10, 2) /* 0xfffffe0009fa3fd4 */
+#define SYS_PMGR_SAMPLE_C14_2 sys_reg(3, 7, 15, 14, 2) /* 0xfffffe0009fa3ff4 */
+#define SYS_PMGR_SAMPLE_C0_6  sys_reg(3, 7, 15, 0, 6)  /* 0xfffffe0009fa4014 */
+#define SYS_PMGR_SAMPLE_C2_6  sys_reg(3, 7, 15, 2, 6)  /* 0xfffffe0009fa4030 */
+#define SYS_PMGR_SAMPLE_C4_2  sys_reg(3, 7, 15, 4, 2)  /* 0xfffffe0009fa4050 */
+#define SYS_PMGR_SAMPLE_C12_2 sys_reg(3, 7, 15, 12, 2) /* 0xfffffe0009fa4070 */
+
 static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
 {
     u64 reg = iss & (ESR_ISS_MSR_OP0 | ESR_ISS_MSR_OP2 | ESR_ISS_MSR_OP1 | ESR_ISS_MSR_CRn |
@@ -663,6 +678,21 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
     if (!cpu_features->apple_sysregs_unlocked &&
         hv_handle_gxf_shadow(ctx, reg, rt, is_read))
         return true;
+
+    if (is_read) {
+        switch (reg) {
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C8_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C4_6)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C2_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C6_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C10_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C14_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C0_6)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C2_6)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C4_2)
+            SYSREG_PASS(SYS_PMGR_SAMPLE_C12_2)
+        }
+    }
 
     switch (reg) {
         SYSREG_PASS(SYS_IMP_APL_CORE_NRG_ACC_DAT);

@@ -2,6 +2,14 @@
 
 #include "hv_sptm_internal.h"
 
+/*
+ * macOS 27 26A428 _image4_v2_set_nonce_digest (0xfffffe000c28301c):
+ * 0xfffffe000c283044 loads selector 0x34; 0xfffffe000c283054 loads three
+ * arguments. The zero-initialized return-word count is unchanged, and
+ * 0xfffffe000c28306c branches directly to return on success.
+ */
+#define TXM_IMAGE4_SET_NONCE_DIGEST 52
+
 bool sptm_handle_txm(struct exc_info *ctx, u32 endpoint)
 {
     const u64 success = 0;
@@ -24,7 +32,7 @@ bool sptm_handle_txm(struct exc_info *ctx, u32 endpoint)
             if (!sptm.txm_info_va)
                 return false;
             words[0] = sptm.txm_info_va;
-            words[1] = sptm.txm_info_va + 0x318;
+            words[1] = sptm.txm_info_va + SPTM_TXM_SIGNING_DISABLED_OFFSET;
             words[5] = sptm.txm_info_va;
             word_count = 6;
             break;
@@ -84,6 +92,9 @@ bool sptm_handle_txm(struct exc_info *ctx, u32 endpoint)
         case 40:
         case 42:
         case 45:
+            break;
+        case TXM_IMAGE4_SET_NONCE_DIGEST:
+            /* Match the permissive Image4 shim: acknowledge, without nonce persistence. */
             break;
         case 46:
         case 47:

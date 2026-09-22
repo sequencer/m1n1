@@ -40,6 +40,20 @@
 #define SPTM_TXM_RECORD_OFFSET 0x3c00
 #define SPTM_TXM_RECORD_SIZE   0x58
 #define SPTM_TXM_MAX_WORDS     7
+/*
+ * macOS 27 build 26A428, kernelcache TXM initialization after selector 2:
+ * 0xfffffe000c283ddc: ldr x10, [sp, #0x70] obtains return word 5 (RO data).
+ * 0xfffffe000c283e10: add x11, x10, #0x158 publishes CSConfiguration.
+ * 0xfffffe000c283e1c: ldr x11, [x10, #0x158] follows its systemPolicy pointer.
+ */
+#define SPTM_TXM_SYSTEM_POLICY_OFFSET 0x158
+/*
+ * Same build, 0xfffffe000c283dfc: ldrb w8, [x10, #0x2d8].
+ * The following AND/EOR invert bit 0 into XNU's CSM-enabled flag.
+ * Store 1 here to disable CSM; selector 2 also returns this byte's address
+ * as the developer-mode boolean, read through return word 1.
+ */
+#define SPTM_TXM_SIGNING_DISABLED_OFFSET 0x2d8
 
 #define SPTM_SART_ENTRIES    16
 #define SPTM_SART_PAGE_SHIFT 12

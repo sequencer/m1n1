@@ -708,8 +708,8 @@ u64 sptm_boot_init(u64 guest_adt, u64 cons_ops, u64 page_shift_const, u64 xnu_te
         write64(txm_stack_array_pa + index * sizeof(u64),
                 sptm_boot_va(&context, txm_stacks_pa + index * SPTM_PAGE_SIZE));
     // TXM uses this zeroed policy page to disable monitor signing and enable developer mode.
-    write64(txm_info_pa + 0x190, context.txm_info_va);
-    write8(txm_info_pa + 0x318, 1);
+    write64(txm_info_pa + SPTM_TXM_SYSTEM_POLICY_OFFSET, context.txm_info_va);
+    write8(txm_info_pa + SPTM_TXM_SIGNING_DISABLED_OFFSET, 1);
 
     // This boot-created global UAT state never passes through INIT_STATE.
     write8(context.uat_global_state_pa, uat_mode == 0 ? 2 : 8);
