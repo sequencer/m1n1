@@ -2887,9 +2887,15 @@ int kboot_boot(void *kernel)
 
     usb_init();
     pcie_init();
-    /* HACK: DAPF init raises an SError on T8132. */
-    if (chip_id != T8132)
-        dapf_init_all();
+    /*
+     * On T8132 programming the filters raises an SError unless the ANE domain
+     * is on, so power it the way the proxy boot flow does. Skipping the
+     * filters instead leaves MTP without access to its memory: its DART
+     * interrupt storms and the coprocessor never maps its endpoints.
+     */
+    if (chip_id == T8132)
+        pmgr_adt_power_enable("/arm-io/ane");
+    dapf_init_all();
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
