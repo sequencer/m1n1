@@ -313,6 +313,15 @@ static int dt_set_chosen(void)
     if (fdt_setprop(dt, node, "asahi,m1n1-stage2-version", m1n1_version, strlen(m1n1_version) + 1))
         bail("FDT: couldn't set asahi,m1n1-stage2-version\n");
 
+    /*
+     * GETRAND is a SEPROM command. Where iBoot has already booted sepOS (ADT
+     * /arm-io/sep sepfw-booted, T8132) nothing answers it: the request is
+     * taken out of the mailbox and no reply ever comes.
+     */
+    int sep = adt_path_offset(adt, "/arm-io/sep");
+    if (sep >= 0 && adt_getprop(adt, sep, "sepfw-booted", NULL))
+        return dt_set_rng_seed_adt(node);
+
     if (dt_set_rng_seed_sep(node))
         return dt_set_rng_seed_adt(node);
 
