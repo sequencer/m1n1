@@ -2215,6 +2215,64 @@ err:
     return 0;
 }
 
+/*
+ * The AOP firmware is pre-loaded by iBoot. Its __ETEXT and __EDATA segments
+ * live in DRAM and are reached through dart-aop SID 0 at the DVAs of the
+ * ADT segment-ranges (entry +0x10). macOS 27.0 maps every segment whose flags
+ * lack bit 1 at that DVA and leaves the others (__TEXT and __DATA in the AOP
+ * SRAM, __OS_LOG) alone: AppleA7IOP::_dartMapiBootFirmware, K:8c092cc. Linux
+ * takes over the DART with fresh page tables, so the same mappings are passed
+ * as reserved memory with iommu-addresses.
+ */
+static int dt_reserve_aop_firmware(void)
+{
+    int fdt_node = fdt_path_offset(dt, "aop");
+    if (fdt_node < 0)
+        return 0;
+
+    int node = adt_path_offset(adt, "/arm-io/aop/iop-aop-nub");
+    if (node < 0)
+        bail("ADT: /arm-io/aop/iop-aop-nub not found\n");
+
+    uint32_t dev_phandle = fdt_get_phandle(dt, fdt_node);
+    if (!dev_phandle) {
+        int ret = fdt_generate_phandle(dt, &dev_phandle);
+        if (!ret)
+            ret = fdt_setprop_u32(dt, fdt_node, "phandle", dev_phandle);
+        if (ret != 0)
+            bail("FDT: couldn't set 'aop.phandle' property: %d\n", ret);
+    }
+
+    u32 len;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, node, "segment-ranges", &len);
+    if (!seg)
+        bail("ADT: AOP segment-ranges not found\n");
+
+    for (unsigned int i = 0; i < len / sizeof(*seg); i++, seg++) {
+        if (seg->unk & 2)
+            continue;
+
+        char node_name[64];
+        snprintf(node_name, sizeof(node_name), "asc-firmware@%lx", seg->phys);
+        size_t size = ALIGN_UP(seg->size, SZ_16K);
+
+        int mem_node =
+            dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", true, seg->phys, size);
+        if (mem_node < 0)
+            return mem_node;
+        uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
+
+        int ret = dt_device_set_reserved_mem(mem_node, node_name, dev_phandle, seg->remap, size);
+        if (ret < 0)
+            return ret;
+        ret = dt_device_add_mem_region("aop", mem_phandle, NULL);
+        if (ret < 0)
+            return ret;
+    }
+
+    return 0;
+}
+
 static int dt_setup_sio(void)
 {
     static const char *sio_names[2] = {"sio", "sio1"};
@@ -2846,6 +2904,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_disable_missing_devs("i2c", "i2c@", 8))
         return -1;
     if (dt_setup_sio())
+        return -1;
+    if (dt_reserve_aop_firmware())
         return -1;
     if (dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()))
         return -1;
