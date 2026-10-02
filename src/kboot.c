@@ -2124,11 +2124,11 @@ static int dt_set_sep(void)
         bail("FDT: failed to reserve sepfw");
 
     uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
-    ret = dt_device_add_mem_region(path, mem_phandle, "sepfw");
+    ret = dt_device_add_mem_region("sep", mem_phandle, "sepfw");
     if (ret < 0)
         bail("FDT: failed to add sepfw region");
 
-    int node = fdt_path_offset(dt, path);
+    int node = fdt_path_offset(dt, "sep");
     if (node < 0)
         bail("FDT: sep not not found in devtree\n");
 
