@@ -64,8 +64,9 @@ int mtp_init(void)
     if (dart_use_pt_pool(dart, pt, MTP_PT_SIZE) < 0)
         return -1;
 
-    u64 vm_base = dart_vm_base(dart);
-    iova_domain_t *iovad = iovad_init(vm_base, vm_base + MTP_BFR_SIZE);
+    /* The IOVA allocator wants a 32 MiB aligned base inside the dart-mtp window. */
+    u64 iova_base = ALIGN_UP(dart_vm_base(dart), SZ_32M);
+    iova_domain_t *iovad = iovad_init(iova_base, iova_base + MTP_BFR_SIZE);
     if (!iovad)
         return -1;
 
