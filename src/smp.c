@@ -67,6 +67,8 @@ static_assert(sizeof(spin_table_page.entries) <= sizeof(spin_table_page.page),
 static bool spin_table_published;
 static u64 pmgr_reg;
 static u64 cpu_start_off;
+/* Bits per cluster in the packed CPU start/stop masks (+0x0/+0x4). */
+static u32 cluster_stride = 4;
 
 extern u8 _vectors_start[0];
 int boot_cpu_idx = -1;
@@ -196,7 +198,7 @@ static void smp_start_cpu(int index, int die, int cluster, int core, u64 impl, u
 
     // Some kind of system level startup/status bit
     // Without this, IRQs don't work
-    write32(cpu_start_base + 0x4, 1 << (4 * cluster + core));
+    write32(cpu_start_base + 0x4, 1 << (cluster_stride * cluster + core));
 
     // Actually start the core
     write32(cpu_start_base + 0x8 + 4 * cluster, 1 << core);
@@ -239,7 +241,7 @@ static void smp_stop_cpu(int index, int die, int cluster, int core, u64 impl, u6
     cpu_start_base += die * PMGR_DIE_OFFSET;
 
     // Request CPU stop
-    write32(cpu_start_base + 0x0, 1 << (4 * cluster + core));
+    write32(cpu_start_base + 0x0, 1 << (cluster_stride * cluster + core));
 
     u64 dsleep = deep_sleep;
     // Put the CPU to sleep
@@ -360,6 +362,25 @@ void smp_start_secondaries(void)
         default:
             printf("CPU start offset is unknown for this SoC!\n");
             return;
+    }
+
+    /*
+     * T8132: macOS 27.0 ApplePMGR packs the cores of each cluster at a stride
+     * of the largest cluster, from the pmgr "clusters" core counts (initDriver
+     * fffffe0009b7bf7c..bfa8, configMiscCores fffffe0009b94b88..bcc).
+     */
+    if (chip_id == T8132) {
+        int pmgr_node = adt_path_offset(adt, "/arm-io/pmgr");
+        u32 clusters_len;
+        const u32 *clusters = adt_getprop(adt, pmgr_node, "clusters", &clusters_len);
+
+        if (!clusters) {
+            printf("pmgr clusters property not found\n");
+            return;
+        }
+        cluster_stride = 0;
+        for (u32 i = 0; i < clusters_len / 4; i++)
+            cluster_stride = max(cluster_stride, clusters[i]);
     }
 
     ADT_FOREACH_CHILD(adt, node)
@@ -587,9 +608,9 @@ u64 smp_get_cpu_start_base(void)
 }
 
 /* ADT reg (die/cluster/core) and cpu-impl-reg base of a CPU, as smp_start_secondaries reads them. */
-int smp_get_cpu_regs(int cpu, u32 *reg, u64 *impl)
+int smp_get_cpu_regs(int cpu, u32 *reg, u64 *impl, u64 *coresight)
 {
-    u64 cpu_impl_reg[2];
+    u64 cpu_impl_reg[2], coresight_reg[2];
     int arm_io_node;
 
     if (cpu < 0 || cpu >= MAX_CPUS || !cpu_nodes[cpu])
@@ -608,6 +629,9 @@ int smp_get_cpu_regs(int cpu, u32 *reg, u64 *impl)
         memcpy(cpu_impl_reg, &regs[2 * cpu + 2], 16);
     }
     *impl = cpu_impl_reg[0];
+    if (ADT_GETPROP_ARRAY(adt, cpu_nodes[cpu], "coresight-reg", coresight_reg) < 0)
+        return -1;
+    *coresight = coresight_reg[0];
     return 0;
 }
 

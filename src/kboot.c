@@ -1532,7 +1532,7 @@ static int dt_set_rvbar(void)
     {
         const fdt64_t *prop = fdt_getprop(dt, node, "reg", NULL);
         u32 reg, pmgr_cpu[2];
-        u64 impl;
+        u64 impl, coresight;
         int cpu;
 
         if (strncmp(fdt_get_name(dt, node, NULL), "cpu@", 4) || !prop)
@@ -1542,7 +1542,7 @@ static int dt_set_rvbar(void)
             if ((smp_is_alive(cpu) || cpu == boot_cpu_idx) &&
                 smp_get_mpidr(cpu) == fdt64_ld(prop))
                 break;
-        if (cpu == MAX_CPUS || smp_get_cpu_regs(cpu, &reg, &impl))
+        if (cpu == MAX_CPUS || smp_get_cpu_regs(cpu, &reg, &impl, &coresight))
             bail("FDT: no ADT CPU for %s\n", fdt_get_name(dt, node, NULL));
 
         pmgr_cpu[0] = cpu_to_fdt32(FIELD_GET(GENMASK(10, 8), reg));
@@ -1550,7 +1550,8 @@ static int dt_set_rvbar(void)
 
         if (fdt_setprop_string(dt, node, "enable-method", "apple,rvbar") ||
             fdt_setprop(dt, node, "apple,pmgr-cpu", pmgr_cpu, sizeof(pmgr_cpu)) ||
-            fdt_setprop_u64(dt, node, "apple,cpu-impl-reg", impl))
+            fdt_setprop_u64(dt, node, "apple,cpu-impl-reg", impl) ||
+            fdt_setprop_u64(dt, node, "apple,coresight-reg", coresight))
             bail("FDT: couldn't set rvbar properties of %s\n", fdt_get_name(dt, node, NULL));
     }
 
