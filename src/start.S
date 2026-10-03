@@ -280,11 +280,19 @@ rvbar_dispatch:
     b.eq 3f
     subs x12, x12, #1
     b.ne 1b
+    /*
+     * The OS owns resets once it has set the magic: m1n1's memory is its now.
+     * A core with no slot (powered off by the OS, woken early) waits for the
+     * OS to fill its slot and SEV, then dispatches again.
+     */
+4:
+    wfe
+    b rvbar_dispatch
 2:
     mov x9, '0'
     b cpu_reset
 3:
-    cbz x14, 2b
+    cbz x14, 4b
     /* The only core init m1n1 does on T8132 (init_cpu). */
     msr OSLAR_EL1, xzr
     isb
