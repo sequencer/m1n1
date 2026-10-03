@@ -62,47 +62,6 @@ _vectors_start:
     b exc_unk
     .align 7
 
-/*
- * Reset dispatch (rvbar.h). Runs with the MMU and caches off and touches only
- * this page and x9/x16-x18.
- */
-rvbar_dispatch:
-    adr x10, rvbar_mailbox
-    ldr x11, [x10, #RVBAR_MAILBOX_OFF_MAGIC]
-    movz x12, #(RVBAR_MAILBOX_MAGIC & 0xffff)
-    movk x12, #((RVBAR_MAILBOX_MAGIC >> 16) & 0xffff), lsl #16
-    movk x12, #((RVBAR_MAILBOX_MAGIC >> 32) & 0xffff), lsl #32
-    movk x12, #((RVBAR_MAILBOX_MAGIC >> 48) & 0xffff), lsl #48
-    cmp x11, x12
-    b.ne 2f
-    mrs x11, MPIDR_EL1
-    and x11, x11, #0xffffff
-    orr x11, x11, #RVBAR_SLOT_VALID
-    add x10, x10, #RVBAR_MAILBOX_OFF_SLOTS
-    mov x12, #RVBAR_MAILBOX_SLOTS
-1:
-    ldp x13, x14, [x10], #16
-    cmp x13, x11
-    b.eq 3f
-    subs x12, x12, #1
-    b.ne 1b
-2:
-    mov x9, '0'
-    b cpu_reset
-3:
-    cbz x14, 2b
-    /* The only core init m1n1 does on T8132 (init_cpu). */
-    msr OSLAR_EL1, xzr
-    isb
-    mov x0, xzr
-    br x14
-
-    .align 7
-.globl rvbar_mailbox
-rvbar_mailbox:
-    .quad 0
-    .quad 0
-    .fill RVBAR_MAILBOX_SLOTS * 2, 8, 0
 
 .globl _start
 .type _start, @function
@@ -264,3 +223,46 @@ reboot:
     b .
 
 .pool
+
+/*
+ * Reset dispatch (rvbar.h). Runs with the MMU and caches off and touches only
+ * this page and x9-x14. It sits after the rest of .init because chainload
+ * enters the next stage at base + 0x800, right after the vectors.
+ */
+rvbar_dispatch:
+    adr x10, rvbar_mailbox
+    ldr x11, [x10, #RVBAR_MAILBOX_OFF_MAGIC]
+    movz x12, #(RVBAR_MAILBOX_MAGIC & 0xffff)
+    movk x12, #((RVBAR_MAILBOX_MAGIC >> 16) & 0xffff), lsl #16
+    movk x12, #((RVBAR_MAILBOX_MAGIC >> 32) & 0xffff), lsl #32
+    movk x12, #((RVBAR_MAILBOX_MAGIC >> 48) & 0xffff), lsl #48
+    cmp x11, x12
+    b.ne 2f
+    mrs x11, MPIDR_EL1
+    and x11, x11, #0xffffff
+    orr x11, x11, #RVBAR_SLOT_VALID
+    add x10, x10, #RVBAR_MAILBOX_OFF_SLOTS
+    mov x12, #RVBAR_MAILBOX_SLOTS
+1:
+    ldp x13, x14, [x10], #16
+    cmp x13, x11
+    b.eq 3f
+    subs x12, x12, #1
+    b.ne 1b
+2:
+    mov x9, '0'
+    b cpu_reset
+3:
+    cbz x14, 2b
+    /* The only core init m1n1 does on T8132 (init_cpu). */
+    msr OSLAR_EL1, xzr
+    isb
+    mov x0, xzr
+    br x14
+
+    .align 7
+.globl rvbar_mailbox
+rvbar_mailbox:
+    .quad 0
+    .quad 0
+    .fill RVBAR_MAILBOX_SLOTS * 2, 8, 0
