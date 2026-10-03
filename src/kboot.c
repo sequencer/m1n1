@@ -1526,12 +1526,13 @@ static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat,
 extern u8 _vectors_start[0];
 
 /*
- * T8132: hand the OS the RVBAR mailbox (rvbar.h) instead of a spin table.
+ * T8132: hand the OS the RVBAR mailbox (rvbar.h) next to the spin table.
  * The CPUs use enable-method "apple,rvbar"; each CPU node gets its PMGR
  * cluster/core (ADT reg; T8132 has one die) and cpu-impl-reg base, and the reserved page
  * holding the vectors, the dispatcher and the mailbox names the mailbox and
- * the PMGR CPU start block. kboot_boot powers the secondaries off, so every
- * core the OS runs has come through the dispatcher.
+ * the PMGR CPU start block. The secondaries stay parked in the spin table
+ * (cpu-release-addr) for their first start; the mailbox brings them back after
+ * the OS powers them off, and the boot CPU back from S2R.
  */
 static int dt_set_rvbar(void)
 {
@@ -1580,7 +1581,6 @@ static int dt_set_rvbar(void)
             fdt_setprop(dt, node, "apple,pmgr-cpu", pmgr_cpu, sizeof(pmgr_cpu)) ||
             fdt_setprop_u64(dt, node, "apple,cpu-impl-reg", impl))
             bail("FDT: couldn't set rvbar properties of %s\n", fdt_get_name(dt, node, NULL));
-        fdt_delprop(dt, node, "cpu-release-addr");
     }
 
     return 0;
@@ -3168,9 +3168,6 @@ int kboot_boot(void *kernel)
     if (chip_id == T8132)
         pmgr_adt_power_enable("/arm-io/ane");
     dapf_init_all();
-
-    if (chip_id == T8132)
-        smp_stop_secondaries(false);
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);

@@ -253,6 +253,8 @@ void deep_wfi(void)
  * 0 and 63 of s3_5_c15_c6_2. Then it loops on WFI, acknowledging a fast IPI
  * after each spurious wake, until the core loses power; it next runs from
  * RVBAR.
+ * At EL2 the s3_1_c15_c7_4 write is UNDEFINED (ESR EC 0 on J713, 2026-10-03),
+ * so m1n1 leaves that step out.
  */
 static void __attribute__((noreturn)) cpu_sleep_t8132(bool deep)
 {
@@ -260,8 +262,6 @@ static void __attribute__((noreturn)) cpu_sleep_t8132(bool deep)
         reg_set(sys_reg(3, 5, 15, 6, 2), BIT(0) | BIT(63));
     } else {
         reg_mask(SYS_IMP_APL_SIQ_CFG_EL1, 3, 3);
-        sysop("isb");
-        reg_clr(sys_reg(3, 1, 15, 7, 4), BIT(0));
         sysop("isb");
     }
 
