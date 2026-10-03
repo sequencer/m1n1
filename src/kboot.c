@@ -1499,7 +1499,7 @@ extern u8 _vectors_start[0];
 /*
  * T8132: hand the OS the RVBAR mailbox (rvbar.h) instead of a spin table.
  * The CPUs use enable-method "apple,rvbar"; each CPU node gets its PMGR
- * die/cluster/core (ADT reg) and cpu-impl-reg base, and the reserved page
+ * cluster/core (ADT reg; T8132 has one die) and cpu-impl-reg base, and the reserved page
  * holding the vectors, the dispatcher and the mailbox names the mailbox and
  * the PMGR CPU start block. kboot_boot powers the secondaries off, so every
  * core the OS runs has come through the dispatcher.
@@ -1530,7 +1530,7 @@ static int dt_set_rvbar(void)
     fdt_for_each_subnode(node, dt, cpus)
     {
         const fdt64_t *prop = fdt_getprop(dt, node, "reg", NULL);
-        u32 reg, pmgr_cpu[3];
+        u32 reg, pmgr_cpu[2];
         u64 impl;
         int cpu;
 
@@ -1544,9 +1544,8 @@ static int dt_set_rvbar(void)
         if (cpu == MAX_CPUS || smp_get_cpu_regs(cpu, &reg, &impl))
             bail("FDT: no ADT CPU for %s\n", fdt_get_name(dt, node, NULL));
 
-        pmgr_cpu[0] = cpu_to_fdt32(FIELD_GET(GENMASK(14, 11), reg));
-        pmgr_cpu[1] = cpu_to_fdt32(FIELD_GET(GENMASK(10, 8), reg));
-        pmgr_cpu[2] = cpu_to_fdt32(FIELD_GET(GENMASK(7, 0), reg));
+        pmgr_cpu[0] = cpu_to_fdt32(FIELD_GET(GENMASK(10, 8), reg));
+        pmgr_cpu[1] = cpu_to_fdt32(FIELD_GET(GENMASK(7, 0), reg));
 
         if (fdt_setprop_string(dt, node, "enable-method", "apple,rvbar") ||
             fdt_setprop(dt, node, "apple,pmgr-cpu", pmgr_cpu, sizeof(pmgr_cpu)) ||
