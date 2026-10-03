@@ -557,6 +557,36 @@ uint64_t smp_get_mpidr(int cpu)
     return spin_table[cpu].mpidr;
 }
 
+u64 smp_get_cpu_start_base(void)
+{
+    return cpu_start_base;
+}
+
+/* ADT reg (die/cluster/core) and cpu-impl-reg base of a CPU, as smp_start_secondaries reads them. */
+int smp_get_cpu_regs(int cpu, u32 *reg, u64 *impl)
+{
+    u64 cpu_impl_reg[2];
+    int arm_io_node;
+
+    if (cpu < 0 || cpu >= MAX_CPUS || !cpu_nodes[cpu])
+        return -1;
+    if (ADT_GETPROP(adt, cpu_nodes[cpu], "reg", reg) < 0)
+        return -1;
+    if (ADT_GETPROP_ARRAY(adt, cpu_nodes[cpu], "cpu-impl-reg", cpu_impl_reg) < 0) {
+        u32 reg_len;
+        const u64 *regs;
+
+        if ((arm_io_node = adt_path_offset(adt, "/arm-io")) < 0)
+            return -1;
+        regs = adt_getprop(adt, arm_io_node, "reg", &reg_len);
+        if (!regs || reg_len < (u32)(2 * cpu + 2))
+            return -1;
+        memcpy(cpu_impl_reg, &regs[2 * cpu + 2], 16);
+    }
+    *impl = cpu_impl_reg[0];
+    return 0;
+}
+
 u64 smp_get_release_addr(int cpu)
 {
     struct spin_table *target = &spin_table[cpu];
