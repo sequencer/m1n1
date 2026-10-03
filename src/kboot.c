@@ -20,6 +20,7 @@
 #include "memory.h"
 #include "pcie.h"
 #include "pmgr.h"
+#include "rvbar.h"
 #include "sep.h"
 #include "sio.h"
 #include "smp.h"
@@ -1493,6 +1494,70 @@ static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat,
     return node;
 }
 
+extern u8 _vectors_start[0];
+
+/*
+ * T8132: hand the OS the RVBAR mailbox (rvbar.h) instead of a spin table.
+ * The CPUs use enable-method "apple,rvbar"; each CPU node gets its PMGR
+ * die/cluster/core (ADT reg) and cpu-impl-reg base, and the reserved page
+ * holding the vectors, the dispatcher and the mailbox names the mailbox and
+ * the PMGR CPU start block. kboot_boot powers the secondaries off, so every
+ * core the OS runs has come through the dispatcher.
+ */
+static int dt_set_rvbar(void)
+{
+    u64 page = (u64)_vectors_start & ~(u64)(SZ_16K - 1);
+    int node, cpus;
+
+    if (chip_id != T8132)
+        return 0;
+
+    if ((u64)&rvbar_mailbox + sizeof(rvbar_mailbox) > page + SZ_16K)
+        bail("FDT: RVBAR mailbox is outside the vectors page\n");
+
+    node = dt_get_or_add_reserved_mem("rvbar", "apple,rvbar-mailbox", true, page, SZ_16K);
+    if (node < 0)
+        return node;
+    if (fdt_setprop_u64(dt, node, "apple,mailbox", (u64)&rvbar_mailbox))
+        bail("FDT: couldn't set rvbar mailbox\n");
+    if (fdt_setprop_u64(dt, node, "apple,cpu-start", smp_get_cpu_start_base()))
+        bail("FDT: couldn't set rvbar cpu-start\n");
+
+    cpus = fdt_path_offset(dt, "/cpus");
+    if (cpus < 0)
+        bail("FDT: /cpus node not found in devtree\n");
+
+    fdt_for_each_subnode(node, dt, cpus)
+    {
+        const fdt64_t *prop = fdt_getprop(dt, node, "reg", NULL);
+        u32 reg, pmgr_cpu[3];
+        u64 impl;
+        int cpu;
+
+        if (strncmp(fdt_get_name(dt, node, NULL), "cpu@", 4) || !prop)
+            continue;
+
+        for (cpu = 0; cpu < MAX_CPUS; cpu++)
+            if ((smp_is_alive(cpu) || cpu == boot_cpu_idx) &&
+                smp_get_mpidr(cpu) == fdt64_ld(prop))
+                break;
+        if (cpu == MAX_CPUS || smp_get_cpu_regs(cpu, &reg, &impl))
+            bail("FDT: no ADT CPU for %s\n", fdt_get_name(dt, node, NULL));
+
+        pmgr_cpu[0] = cpu_to_fdt32(FIELD_GET(GENMASK(14, 11), reg));
+        pmgr_cpu[1] = cpu_to_fdt32(FIELD_GET(GENMASK(10, 8), reg));
+        pmgr_cpu[2] = cpu_to_fdt32(FIELD_GET(GENMASK(7, 0), reg));
+
+        if (fdt_setprop_string(dt, node, "enable-method", "apple,rvbar") ||
+            fdt_setprop(dt, node, "apple,pmgr-cpu", pmgr_cpu, sizeof(pmgr_cpu)) ||
+            fdt_setprop_u64(dt, node, "apple,cpu-impl-reg", impl))
+            bail("FDT: couldn't set rvbar properties of %s\n", fdt_get_name(dt, node, NULL));
+        fdt_delprop(dt, node, "cpu-release-addr");
+    }
+
+    return 0;
+}
+
 static int dt_device_add_mem_region(const char *alias, uint32_t phandle, const char *name)
 {
     int ret;
@@ -2949,6 +3014,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_cpus())
         return -1;
+    if (dt_set_rvbar())
+        return -1;
     if (dt_set_mac_addresses())
         return -1;
     if (dt_set_wifi())
@@ -3045,6 +3112,9 @@ int kboot_boot(void *kernel)
     if (chip_id == T8132)
         pmgr_adt_power_enable("/arm-io/ane");
     dapf_init_all();
+
+    if (chip_id == T8132)
+        smp_stop_secondaries(false);
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);

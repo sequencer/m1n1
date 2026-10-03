@@ -246,8 +246,38 @@ void deep_wfi(void)
         msr(SYS_IMP_APL_CYC_OVRD, cyc_ovrd);
 }
 
+/*
+ * XNU 27.0 (26A428) arm64_prepare_for_sleep (fffffe000bc31600) for T8132,
+ * where CYC_OVRD is locked: for a core power-down it sets SIQ_CFG_EL1[1:0] to
+ * 3 and clears bit 0 of s3_1_c15_c7_4; for system sleep (deep) it sets bits
+ * 0 and 63 of s3_5_c15_c6_2. Then it loops on WFI, acknowledging a fast IPI
+ * after each spurious wake, until the core loses power; it next runs from
+ * RVBAR.
+ */
+static void __attribute__((noreturn)) cpu_sleep_t8132(bool deep)
+{
+    if (deep) {
+        reg_set(sys_reg(3, 5, 15, 6, 2), BIT(0) | BIT(63));
+    } else {
+        reg_mask(SYS_IMP_APL_SIQ_CFG_EL1, 3, 3);
+        sysop("isb");
+        reg_clr(sys_reg(3, 1, 15, 7, 4), BIT(0));
+        sysop("isb");
+    }
+
+    while (1) {
+        sysop("dsb sy");
+        sysop("isb");
+        sysop("wfi");
+        msr(SYS_IMP_APL_IPI_SR_EL1, 1);
+    }
+}
+
 void cpu_sleep(bool deep)
 {
+    if (chip_id == T8132)
+        cpu_sleep_t8132(deep);
+
     if (deep) {
         switch (cpu_features->sleep_mode) {
             case SLEEP_GLOBAL:

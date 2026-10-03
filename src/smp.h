@@ -30,6 +30,8 @@ u64 smp_wait(int cpu);
 bool smp_is_alive(int cpu);
 uint64_t smp_get_mpidr(int cpu);
 u64 smp_get_release_addr(int cpu);
+u64 smp_get_cpu_start_base(void);
+int smp_get_cpu_regs(int cpu, u32 *reg, u64 *impl);
 void smp_set_wfe_mode(bool new_mode);
 void smp_send_ipi(int cpu);
 
