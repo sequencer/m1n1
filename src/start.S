@@ -231,6 +231,12 @@ reboot:
  */
 rvbar_dispatch:
     adr x10, rvbar_mailbox
+    /* Debug breadcrumb: which core reset into the dispatcher. */
+    mrs x11, MPIDR_EL1
+    and x11, x11, #0xffffff
+    orr x11, x11, #(1 << 62)
+    str x11, [x10, #RVBAR_MAILBOX_OFF_SEEN]
+    dsb sy
     ldr x11, [x10, #RVBAR_MAILBOX_OFF_MAGIC]
     movz x12, #(RVBAR_MAILBOX_MAGIC & 0xffff)
     movk x12, #((RVBAR_MAILBOX_MAGIC >> 16) & 0xffff), lsl #16
@@ -254,6 +260,10 @@ rvbar_dispatch:
     b cpu_reset
 3:
     cbz x14, 2b
+    adr x10, rvbar_mailbox
+    orr x13, x13, #(1 << 61)
+    str x13, [x10, #RVBAR_MAILBOX_OFF_SEEN]
+    dsb sy
     /* The only core init m1n1 does on T8132 (init_cpu). */
     msr OSLAR_EL1, xzr
     isb

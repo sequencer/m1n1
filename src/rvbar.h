@@ -27,6 +27,7 @@
 #endif
 
 #define RVBAR_MAILBOX_OFF_MAGIC 0
+#define RVBAR_MAILBOX_OFF_SEEN  8 /* last reset: MPIDR, bit 62 entered, bit 61 jumped */
 #define RVBAR_MAILBOX_OFF_SLOTS 16
 
 #ifndef __ASSEMBLER__
