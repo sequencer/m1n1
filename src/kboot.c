@@ -13,6 +13,7 @@
 #include "firmware.h"
 #include "iodev.h"
 #include "isp.h"
+#include "mtp.h"
 #include "kboot_atc.h"
 #include "malloc.h"
 #include "mcc.h"
@@ -2374,6 +2375,80 @@ static int dt_set_isp_fwdata(void)
     return 0;
 }
 
+/*
+ * Hand the running MTP session to the next stage: each RTKit buffer becomes a
+ * reserved region mapped at its IOVA for the mtp node, the dart-mtp page tables
+ * stay reserved, and the node says where the syslog and crashlog buffers are.
+ */
+static int dt_mtp_buffer(uint32_t mtp_phandle, const char *name, const struct rtkit_buffer *bfr)
+{
+    char node_name[64];
+
+    if (!bfr->bfr)
+        return 0;
+
+    snprintf(node_name, sizeof(node_name), "mtp-%s@%lx", name, (u64)bfr->bfr);
+    int mem_node = dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", true, (u64)bfr->bfr,
+                                              bfr->sz);
+    if (mem_node < 0)
+        return -1;
+    if (dt_device_set_reserved_mem(mem_node, node_name, mtp_phandle, bfr->dva, bfr->sz) < 0)
+        return -1;
+
+    uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
+    if (dt_device_add_mem_region("mtp", mem_phandle, NULL) < 0)
+        return -1;
+
+    return 0;
+}
+
+static int dt_set_mtp(void)
+{
+    const struct mtp_handoff *h = mtp_get_handoff();
+    char node_name[64];
+    int ret;
+
+    if (!h)
+        return 0;
+
+    int node = fdt_path_offset(dt, "mtp");
+    if (node < 0)
+        bail("FDT: MTP is running but there is no mtp alias\n");
+
+    uint32_t phandle = fdt_get_phandle(dt, node);
+    if (!phandle) {
+        ret = fdt_generate_phandle(dt, &phandle);
+        if (!ret)
+            ret = fdt_setprop_u32(dt, node, "phandle", phandle);
+        if (ret != 0)
+            bail("FDT: couldn't set mtp phandle: %d\n", ret);
+    }
+
+    snprintf(node_name, sizeof(node_name), "mtp-dart-pt@%lx", h->pt_phys);
+    if (dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", true, h->pt_phys, h->pt_size) < 0)
+        return -1;
+
+    if (dt_mtp_buffer(phandle, "syslog", &h->bfrs.syslog) ||
+        dt_mtp_buffer(phandle, "crashlog", &h->bfrs.crashlog) ||
+        dt_mtp_buffer(phandle, "ioreport", &h->bfrs.ioreport) ||
+        dt_mtp_buffer(phandle, "oslog", &h->bfrs.oslog))
+        return -1;
+
+    node = fdt_path_offset(dt, "mtp");
+    if (fdt_setprop_empty(dt, node, "apple,rtkit-running"))
+        bail("FDT: couldn't set apple,rtkit-running\n");
+
+    fdt64_t syslog[2] = {cpu_to_fdt64(h->bfrs.syslog.dva), cpu_to_fdt64(h->bfrs.syslog.sz)};
+    fdt32_t entries[2] = {cpu_to_fdt32(h->bfrs.syslog_cnt), cpu_to_fdt32(h->bfrs.syslog_size)};
+    fdt64_t crashlog[2] = {cpu_to_fdt64(h->bfrs.crashlog.dva), cpu_to_fdt64(h->bfrs.crashlog.sz)};
+    if (fdt_setprop(dt, node, "apple,syslog-buffer", syslog, sizeof(syslog)) ||
+        fdt_setprop(dt, node, "apple,syslog-entries", entries, sizeof(entries)) ||
+        fdt_setprop(dt, node, "apple,crashlog-buffer", crashlog, sizeof(crashlog)))
+        bail("FDT: couldn't describe the MTP RTKit buffers\n");
+
+    return 0;
+}
+
 static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix, int max_devs)
 {
     int ret = -1;
@@ -2842,6 +2917,9 @@ int kboot_prepare_dt(void *fdt)
 
     /* Need to init ISP early to carve out heap */
     isp_init();
+    /* MTP runs from here on and its memory is carved out the same way */
+    if (mtp_init() < 0)
+        printf("mtp: not started, the next stage starts it\n");
 
     dt_bufsize = fdt_totalsize(fdt);
     assert(dt_bufsize);
@@ -2910,6 +2988,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()))
         return -1;
     if (dt_set_isp_fwdata())
+        return -1;
+    if (dt_set_mtp())
         return -1;
     if (dt_set_pmgr())
         return -1;

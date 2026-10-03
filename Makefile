@@ -153,6 +153,7 @@ OBJECTS := \
 	iodev.o \
 	iova.o \
 	isp.o \
+	mtp.o \
 	kboot.o kboot_atc.o \
 	kboot_t6020_compat.o \
 	main.o \

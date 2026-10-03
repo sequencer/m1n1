@@ -119,6 +119,10 @@ struct dart_dev {
     u64 vm_base;
 
     u64 *l1[DART_MAX_TTBR_COUNT];
+
+    /* Page tables come from here instead of the heap when set. */
+    u64 pt_pool;
+    u64 pt_pool_end;
 };
 
 static void dart_t8020_tlb_invalidate(dart_dev_t *dart)
@@ -503,9 +507,17 @@ static u64 *dart_get_l2(dart_dev_t *dart, u32 idx)
         return (u64 *)off;
     }
 
-    u64 *tbl = memalign(SZ_16K, SZ_16K);
-    if (!tbl)
-        return NULL;
+    u64 *tbl;
+    if (dart->pt_pool) {
+        if (dart->pt_pool + SZ_16K > dart->pt_pool_end)
+            return NULL;
+        tbl = (u64 *)dart->pt_pool;
+        dart->pt_pool += SZ_16K;
+    } else {
+        tbl = memalign(SZ_16K, SZ_16K);
+        if (!tbl)
+            return NULL;
+    }
 
     memset(tbl, 0, SZ_16K);
 
@@ -757,6 +769,36 @@ void dart_shutdown(dart_dev_t *dart)
         if (is_heap(dart->l1[i]))
             free(dart->l1[i]);
     free(dart);
+}
+
+/*
+ * Move the page tables of a fresh DART stream into [base, base + size), memory
+ * the caller keeps reserved, so that the stream can be handed to the next stage
+ * with its mappings.
+ */
+int dart_use_pt_pool(dart_dev_t *dart, u64 base, size_t size)
+{
+    dart->pt_pool = base;
+    dart->pt_pool_end = base + size;
+
+    for (int i = 0; i < dart->params->ttbr_count; i++) {
+        if (dart->pt_pool + SZ_16K > dart->pt_pool_end)
+            return -1;
+
+        u64 *l1 = (u64 *)dart->pt_pool;
+        dart->pt_pool += SZ_16K;
+        memset(l1, 0, SZ_16K);
+
+        if (is_heap(dart->l1[i]))
+            free(dart->l1[i]);
+        dart->l1[i] = l1;
+        write32(DART_TTBR(dart, i),
+                dart->params->ttbr_valid |
+                    FIELD_PREP(dart->params->ttbr_addr, ((uintptr_t)l1) >> dart->params->ttbr_shift));
+    }
+
+    dart->params->tlb_invalidate(dart);
+    return 0;
 }
 
 u64 dart_vm_base(dart_dev_t *dart)
