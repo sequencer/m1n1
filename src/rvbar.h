@@ -14,9 +14,10 @@
  * The mailbox lives in the first page of .init, together with the vectors and
  * the dispatcher, and the OS keeps that page reserved. The OS fills one slot
  * per core: {MPIDR | RVBAR_SLOT_VALID, entry}. A core whose MPIDR has a slot
- * with a non-zero entry jumps there at EL2 with the MMU off; any other reset
- * takes m1n1's normal path. iBoot reloads the image on a cold boot, which
- * clears the mailbox.
+ * with a non-zero entry jumps there at EL2 with the MMU off. Once the magic is
+ * set the OS owns every reset: a core without a usable slot waits in WFE for
+ * the OS to fill it and SEV. Without the magic a reset takes m1n1's normal
+ * path. iBoot reloads the image on a cold boot, which clears the mailbox.
  */
 #define RVBAR_MAILBOX_MAGIC 0x4b414c3252564241 /* "ABVR2LAK" */
 #define RVBAR_MAILBOX_SLOTS 24

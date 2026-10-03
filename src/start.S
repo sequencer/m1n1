@@ -255,11 +255,19 @@ rvbar_dispatch:
     b.eq 3f
     subs x12, x12, #1
     b.ne 1b
+    /*
+     * The OS owns resets once it has set the magic: m1n1's memory is its now.
+     * A core with no slot (powered off by the OS, woken early) waits for the
+     * OS to fill its slot and SEV, then dispatches again.
+     */
+4:
+    wfe
+    b rvbar_dispatch
 2:
     mov x9, '0'
     b cpu_reset
 3:
-    cbz x14, 2b
+    cbz x14, 4b
     adr x10, rvbar_mailbox
     orr x13, x13, #(1 << 61)
     str x13, [x10, #RVBAR_MAILBOX_OFF_SEEN]
