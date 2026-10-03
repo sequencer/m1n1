@@ -516,6 +516,19 @@ static int dt_set_gpu_t8132_adt(void *dt, int gpu, int sgx)
     if (fdt_setprop_u32(dt, gpu, "apple,chip-revision", revision) ||
         fdt_setprop_string(dt, gpu, "apple,firmware-build", os_firmware.iboot))
         return -1;
+
+    /*
+     * macOS 27.0 AppleT8132PMGR::initDriver republishes the pmgr ADT property
+     * mtr-polynom-fuse-agx as MtrPolynomGFX, and AGXAccelerator::configureDevice
+     * builds the GPU MTR chain mask from its records.
+     */
+    int pmgr = adt_path_offset(adt, "/arm-io/pmgr");
+    u32 mtr_len;
+    const void *mtr = adt_getprop(adt, pmgr, "mtr-polynom-fuse-agx", &mtr_len);
+    if (!mtr)
+        bail("ADT: GPU: missing pmgr mtr-polynom-fuse-agx\n");
+    if (fdt_setprop(dt, gpu, "apple,mtr-polynom-gfx", mtr, mtr_len))
+        return -1;
     return 0;
 }
 
