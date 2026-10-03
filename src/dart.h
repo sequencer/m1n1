@@ -21,6 +21,7 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
 void dart_lock_adt(const char *path, int instance);
 dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts);
 int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_base);
+int dart_use_pt_pool(dart_dev_t *dart, u64 base, size_t size);
 int dart_map(dart_dev_t *dart, uintptr_t iova, void *bfr, size_t len);
 int dart_map_flags(dart_dev_t *dart, uintptr_t iova, void *bfr, size_t len, u32 flags);
 void dart_unmap(dart_dev_t *dart, uintptr_t iova, size_t len);

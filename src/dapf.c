@@ -133,6 +133,18 @@ static int dapf_init_t8110(const char *path, u64 base, int node)
     }
 }
 
+/* Filters already programmed in this boot; MTP may be running behind one. */
+#define DAPF_MAX_DONE 16
+static const char *dapf_done[DAPF_MAX_DONE];
+
+static bool dapf_is_done(const char *path)
+{
+    for (int i = 0; i < DAPF_MAX_DONE && dapf_done[i]; i++)
+        if (!strcmp(dapf_done[i], path))
+            return true;
+    return false;
+}
+
 int dapf_init(const char *path, int index)
 {
     int ret;
@@ -169,8 +181,15 @@ int dapf_init(const char *path, int index)
     if (pwr)
         pmgr_adt_power_disable(path);
 
-    if (!ret)
+    if (!ret) {
         printf("dapf: Initialized %s\n", path);
+        for (int i = 0; i < DAPF_MAX_DONE; i++) {
+            if (!dapf_done[i]) {
+                dapf_done[i] = path;
+                break;
+            }
+        }
+    }
 
     return ret;
 }
@@ -195,7 +214,7 @@ int dapf_init_all(void)
     struct entry *entry = dapf_entries;
 
     while (entry->path != NULL) {
-        if (adt_path_offset(adt, entry->path) < 0) {
+        if (adt_path_offset(adt, entry->path) < 0 || dapf_is_done(entry->path)) {
             entry++;
             continue;
         }

@@ -40,8 +40,23 @@
 #define MSG_SYSLOG_LOG            5
 #define MSG_SYSLOG_LOG_INDEX      GENMASK(7, 0)
 
-#define MSG_OSLOG_INIT 0x10
-#define MSG_OSLOG_ACK  0x30
+/*
+ * OSLog, as RTBuddyOSLogEndpoint::_messageHandler of macOS 27.0 takes it
+ * (kernelcache fffffe000b6d3dd4): type in bits 59:56. A buffer request carries
+ * the size in bits 55:36 and, when the IOP supplies the buffer, its page
+ * number in bits 35:0; only a request without a buffer is answered, with the
+ * page number of the new buffer in bits 31:0 (_handleNewCoalescerRequest,
+ * fffffe000b6d4300). A flush is acknowledged with bits 63:60 and 31:0 kept
+ * (_handleFlushRequest).
+ */
+#define MSG_OSLOG_TYPE           GENMASK(59, 56)
+#define MSG_OSLOG_BUFFER_REQUEST 1
+#define MSG_OSLOG_FLUSH          2
+#define MSG_OSLOG_SIZE           GENMASK(55, 36)
+#define MSG_OSLOG_IOVA           GENMASK(35, 0)
+#define MSG_OSLOG_REPLY_IOVA     GENMASK(31, 0)
+#define MSG_OSLOG_KEEP           GENMASK(63, 60)
+#define MSG_OSLOG_FLUSH_KEEP     (GENMASK(63, 60) | GENMASK(31, 0))
 
 #define MGMT_MSG_HELLO        1
 #define MGMT_MSG_HELLO_ACK    2
@@ -97,6 +112,11 @@ struct rtkit_dev {
     struct rtkit_buffer syslog_bfr;
     struct rtkit_buffer crashlog_bfr;
     struct rtkit_buffer ioreport_bfr;
+    struct rtkit_buffer oslog_bfr;
+
+    /* Buffers come from here instead of the heap when set. */
+    u64 bfr_pool;
+    u64 bfr_pool_end;
 
     u32 syslog_cnt, syslog_size;
 
@@ -243,6 +263,19 @@ bool rtkit_unmap(rtkit_dev_t *rtk, u64 dva, size_t sz)
 
 bool rtkit_alloc_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr, size_t sz)
 {
+    if (rtk->bfr_pool) {
+        sz = ALIGN_UP(sz, SZ_16K);
+        if (rtk->bfr_pool + sz > rtk->bfr_pool_end) {
+            rtkit_printf("buffer pool exhausted (0x%zx)\n", sz);
+            return false;
+        }
+        bfr->bfr = (void *)rtk->bfr_pool;
+        rtk->bfr_pool += sz;
+        memset(bfr->bfr, 0, sz);
+        bfr->sz = sz;
+        return rtkit_map(rtk, bfr->bfr, sz, &bfr->dva);
+    }
+
     bfr->bfr = memalign(SZ_16K, sz);
     if (!bfr->bfr) {
         rtkit_printf("unable to allocate %zu buffer\n", sz);
@@ -330,6 +363,39 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
 
 error:
     return false;
+}
+
+static bool rtkit_handle_oslog(rtkit_dev_t *rtk, struct rtkit_message *msg)
+{
+    struct rtkit_message reply;
+
+    switch (FIELD_GET(MSG_OSLOG_TYPE, msg->msg)) {
+        case MSG_OSLOG_BUFFER_REQUEST: {
+            size_t sz = FIELD_GET(MSG_OSLOG_SIZE, msg->msg);
+            u64 page = FIELD_GET(MSG_OSLOG_IOVA, msg->msg);
+
+            if (page) {
+                rtk->oslog_bfr.dva = page << 12;
+                rtk->oslog_bfr.sz = sz;
+                return true;
+            }
+            if (!rtkit_alloc_buffer(rtk, &rtk->oslog_bfr, sz))
+                return false;
+            reply.ep = RTKIT_EP_OSLOG;
+            reply.msg = (msg->msg & MSG_OSLOG_KEEP) |
+                        FIELD_PREP(MSG_OSLOG_TYPE, MSG_OSLOG_BUFFER_REQUEST) |
+                        FIELD_PREP(MSG_OSLOG_REPLY_IOVA, rtk->oslog_bfr.dva >> 12);
+            return rtkit_send(rtk, &reply);
+        }
+        case MSG_OSLOG_FLUSH:
+            reply.ep = RTKIT_EP_OSLOG;
+            reply.msg = (msg->msg & MSG_OSLOG_FLUSH_KEEP) |
+                        FIELD_PREP(MSG_OSLOG_TYPE, MSG_OSLOG_FLUSH);
+            return rtkit_send(rtk, &reply);
+        default:
+            /* Source register, UUID and role carry no reply. */
+            return true;
+    }
 }
 
 static void rtkit_crashed(rtkit_dev_t *rtk)
@@ -461,7 +527,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
                 }
                 break;
             case RTKIT_EP_OSLOG:
-                rtkit_printf("unknown oslog message %lx\n", msg->msg);
+                ok = ok && rtkit_handle_oslog(rtk, msg);
                 break;
             default:
                 rtkit_printf("message to unknown system endpoint 0x%02x: %lx\n", msg->ep, msg->msg);
@@ -707,6 +773,22 @@ static bool rtkit_switch_power_state(rtkit_dev_t *rtk, enum rtkit_power_state ta
     }
 
     return true;
+}
+
+void rtkit_use_buffer_pool(rtkit_dev_t *rtk, u64 base, size_t size)
+{
+    rtk->bfr_pool = base;
+    rtk->bfr_pool_end = base + size;
+}
+
+void rtkit_get_buffers(rtkit_dev_t *rtk, struct rtkit_buffers *bfrs)
+{
+    bfrs->syslog = rtk->syslog_bfr;
+    bfrs->crashlog = rtk->crashlog_bfr;
+    bfrs->ioreport = rtk->ioreport_bfr;
+    bfrs->oslog = rtk->oslog_bfr;
+    bfrs->syslog_cnt = rtk->syslog_cnt;
+    bfrs->syslog_size = rtk->syslog_size;
 }
 
 bool rtkit_quiesce(rtkit_dev_t *rtk)

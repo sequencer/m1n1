@@ -22,6 +22,14 @@ struct rtkit_buffer {
     size_t sz;
 };
 
+struct rtkit_buffers {
+    struct rtkit_buffer syslog;
+    struct rtkit_buffer crashlog;
+    struct rtkit_buffer ioreport;
+    struct rtkit_buffer oslog;
+    u32 syslog_cnt, syslog_size;
+};
+
 rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *asc, dart_dev_t *dart,
                         iova_domain_t *dart_iovad, sart_dev_t *sart, bool sram);
 bool rtkit_quiesce(rtkit_dev_t *rtk);
@@ -38,6 +46,9 @@ bool rtkit_send(rtkit_dev_t *rtk, const struct rtkit_message *msg);
 
 bool rtkit_map(rtkit_dev_t *rtk, void *phys, size_t sz, u64 *dva);
 bool rtkit_unmap(rtkit_dev_t *rtk, u64 dva, size_t sz);
+
+void rtkit_use_buffer_pool(rtkit_dev_t *rtk, u64 base, size_t size);
+void rtkit_get_buffers(rtkit_dev_t *rtk, struct rtkit_buffers *bfrs);
 
 bool rtkit_alloc_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr, size_t sz);
 bool rtkit_free_buffer(rtkit_dev_t *rtk, struct rtkit_buffer *bfr);
