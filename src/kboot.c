@@ -2431,6 +2431,32 @@ static int dt_set_sep(void)
         bail("ADT: could not get iboot manifest\n");
     fdt_setprop(dt, node, "iboot-manifest", (void *)phys_map[0], phys_map[1]);
 
+    /* Preserve SEP startup policy and APFS preboot identity from this boot.
+     * ADT cells are native-endian; FDT cells are big-endian. A missing
+     * property remains missing, matching the host driver's chosen semantics.
+     */
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int adt_chosen = adt_path_offset(adt, "/chosen");
+    if (chosen < 0 || adt_chosen < 0)
+        bail("FDT/ADT: chosen not found for SEP\n");
+
+    const char *flags[] = {"protected-data-access", "sepfw-load-at-boot"};
+    for (unsigned int i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        u32 length;
+        const u32 *value = adt_getprop(adt, adt_chosen, flags[i], &length);
+        if (value) {
+            if (length != sizeof(*value))
+                bail("ADT: invalid chosen.%s length\n", flags[i]);
+            if (fdt_setprop_u32(dt, chosen, flags[i], *value))
+                bail("FDT: could not set chosen.%s\n", flags[i]);
+            chosen = fdt_path_offset(dt, "/chosen");
+        }
+    }
+    u32 uuid_length;
+    const void *uuid = adt_getprop(adt, adt_chosen, "apfs-preboot-uuid", &uuid_length);
+    if (uuid && fdt_setprop(dt, chosen, "apfs-preboot-uuid", uuid, uuid_length))
+        bail("FDT: could not set chosen.apfs-preboot-uuid\n");
+
     return 0;
 }
 
