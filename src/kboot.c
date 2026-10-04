@@ -2123,6 +2123,225 @@ static bool skip_pmp_prop(const char *prop_name)
     return false;
 }
 
+/*
+ * The apcie root-complex and port tunables, for the OS to replay
+ * AppleT8132PCIe's _enableRootComplex and the port bring-up after S2R, when
+ * the apcie domains come back without them. The ADT properties go across
+ * unchanged (struct tunable_local entries) as apple,tunable-<name>.
+ */
+static const char *const pcie_rc_tunables[] = {
+    "apcie-axi2af-tunables",     "apcie-cio3pllcore-tunables",   "apcie-pcieclkgen-tunables",
+    "apcie-phy-tunables",        "apcie-phy-ip-pll-tunables",    "apcie-phy-ip-auspma-tunables",
+};
+static const char *const pcie_port_tunables[] = {
+    "apcie-config-tunables",
+    "pcie-rc-tunables",
+    "pcie-rc-gen3-shadow-tunables",
+    "pcie-rc-gen4-shadow-tunables",
+};
+
+static int dt_copy_adt_prop(int anode, int node, const char *name, const char *fdt_name)
+{
+    u32 len;
+    const void *val = adt_getprop(adt, anode, name, &len);
+
+    if (!val)
+        return 0;
+    return fdt_setprop(dt, node, fdt_name, val, len);
+}
+
+static int dt_set_apcie_s2r(void)
+{
+    char prop[96], path[64];
+    int anode = adt_path_offset(adt, "/arm-io/apcie");
+    int node = fdt_node_offset_by_compatible(dt, -1, "apple,t8132-pcie");
+
+    if (anode < 0 || node < 0)
+        return 0;
+
+    for (size_t i = 0; i < ARRAY_SIZE(pcie_rc_tunables); i++) {
+        snprintf(prop, sizeof(prop), "apple,tunable-%s", pcie_rc_tunables[i]);
+        if (dt_copy_adt_prop(anode, node, pcie_rc_tunables[i], prop))
+            bail("FDT: failed to set pcie %s\n", prop);
+        node = fdt_node_offset_by_compatible(dt, -1, "apple,t8132-pcie");
+    }
+
+    for (int port = 0; port < 8; port++) {
+        snprintf(path, sizeof(path), "/arm-io/apcie/pci-bridge%d", port);
+        int bridge = adt_path_offset(adt, path);
+        if (bridge < 0)
+            continue;
+        snprintf(path, sizeof(path), "pci@%d,0", port);
+        int pnode = fdt_subnode_offset(dt, node, path);
+        if (pnode < 0)
+            continue;
+        for (size_t i = 0; i < ARRAY_SIZE(pcie_port_tunables); i++) {
+            snprintf(prop, sizeof(prop), "apple,tunable-%s", pcie_port_tunables[i]);
+            if (dt_copy_adt_prop(bridge, pnode, pcie_port_tunables[i], prop))
+                bail("FDT: failed to set pcie port %d %s\n", port, prop);
+            node = fdt_node_offset_by_compatible(dt, -1, "apple,t8132-pcie");
+            pnode = fdt_subnode_offset(dt, node, path);
+        }
+        if (dt_copy_adt_prop(bridge, pnode, "maximum-link-speed", "apple,maximum-link-speed"))
+            bail("FDT: failed to set pcie port %d link speed\n", port);
+        node = fdt_node_offset_by_compatible(dt, -1, "apple,t8132-pcie");
+    }
+    return 0;
+}
+
+/*
+ * What SPTM DART endpoint 5 (powerup) programs on every DART power-up, for
+ * the OS to do after S2R: the GAPF clock-protection slices, the
+ * dart-tunables-instance-N masked writes (relative to TRAD instance N), and
+ * the DAPF entries (dapf-instance-N, FPAD instance N + 0x40 * entry), resolved
+ * as hv_sptm_init does and attached to the DART node with the same TRAD base.
+ * Cells: apple,dart-trad <base64>..., apple,dart-clock-slices <addr64>...,
+ * apple,dart-tunables <addr64 size mask64 value64>..., apple,dart-dapf
+ * <base64 r4 start64 end64 control r20>...; apple,dart-retention when the ADT
+ * DART has retention (endpoint 4 then leaves its streams enabled).
+ */
+#define DART_S2R_MAX_INST 8
+
+struct dart_s2r_inst {
+    u64 base[DART_S2R_MAX_INST];
+    u32 count;
+};
+
+static int dt_find_dart(u64 trad)
+{
+    int node = -1;
+
+    while ((node = fdt_node_offset_by_compatible(dt, node, "apple,t8110-dart")) >= 0) {
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (reg && len >= 16 && fdt64_ld(reg) == trad)
+            return node;
+    }
+    return -1;
+}
+
+static int dt_append_u64(int node, const char *name, u64 v)
+{
+    if (fdt_appendprop_u32(dt, node, name, v >> 32))
+        return -1;
+    return fdt_appendprop_u32(dt, node, name, (u32)v);
+}
+
+static int dt_set_dart_s2r_one(int anode, int *path, u64 *trad_out)
+{
+    struct dart_s2r_inst trad = {0}, fpag = {0}, fpad = {0};
+    char prop[40];
+    u32 size;
+
+    const char *inst = adt_getprop(adt, anode, "instance", &size);
+    for (size_t i = 0; inst && i < size / 16; i++) {
+        struct dart_s2r_inst *kind = NULL;
+        if (!memcmp(inst + i * 16, "TRAD", 4))
+            kind = &trad;
+        else if (!memcmp(inst + i * 16, "FPAG", 4))
+            kind = &fpag;
+        else if (!memcmp(inst + i * 16, "FPAD", 4))
+            kind = &fpad;
+        if (!kind || kind->count >= DART_S2R_MAX_INST)
+            continue;
+        if (adt_get_reg(adt, path, "reg", i, &kind->base[kind->count], NULL) < 0)
+            return -1;
+        kind->count++;
+    }
+    if (!trad.count)
+        return 0;
+    *trad_out = trad.base[0];
+
+    int node = dt_find_dart(trad.base[0]);
+    if (node < 0)
+        return 0;
+
+#define DART_NODE() (node = dt_find_dart(trad.base[0]))
+    for (u32 i = 0; i < trad.count; i++, DART_NODE())
+        if (dt_append_u64(node, "apple,dart-trad", trad.base[i]))
+            return -1;
+
+    const u32 *slices = adt_getprop(adt, anode, "clock-protection-slice-index", &size);
+    u32 nslices = slices ? min(size / 4, fpag.count * trad.count) : 0;
+    for (u32 i = 0; i < nslices; i++, DART_NODE())
+        if (dt_append_u64(node, "apple,dart-clock-slices",
+                          fpag.base[i / trad.count] + 0x140 + (slices[i] - 1) * 0x40))
+            return -1;
+
+    for (u32 i = 0; i < trad.count; i++) {
+        snprintf(prop, sizeof(prop), "dart-tunables-instance-%u", i);
+        const struct tunable_local_entry {
+            u32 offset;
+            u32 size;
+            u64 mask;
+            u64 value;
+        } PACKED *t = adt_getprop(adt, anode, prop, &size);
+        for (size_t j = 0; t && j < size / sizeof(*t); j++) {
+            if (dt_append_u64(node, "apple,dart-tunables", trad.base[i] + t[j].offset) ||
+                fdt_appendprop_u32(dt, DART_NODE(), "apple,dart-tunables", t[j].size) ||
+                dt_append_u64(DART_NODE(), "apple,dart-tunables", t[j].mask) ||
+                dt_append_u64(DART_NODE(), "apple,dart-tunables", t[j].value))
+                return -1;
+            DART_NODE();
+        }
+    }
+
+    for (u32 i = 0; i < fpad.count; i++) {
+        snprintf(prop, sizeof(prop), "dapf-instance-%u", i);
+        const u8 *e = adt_getprop(adt, anode, prop, &size);
+        if (!e)
+            continue;
+        size_t stride = size % 52 == 0 ? 52 : (size % 56 == 0 ? 56 : 55);
+        for (size_t j = 0; j < size / stride; j++, e += stride) {
+            u64 start, end;
+            u32 r20, r4;
+            memcpy(&start, e, 8);
+            memcpy(&end, e + 8, 8);
+            memcpy(&r20, e + 16, 4);
+            memcpy(&r4, e + 24, 4);
+            if (dt_append_u64(node, "apple,dart-dapf", fpad.base[i] + j * 0x40) ||
+                fdt_appendprop_u32(dt, DART_NODE(), "apple,dart-dapf", r4) ||
+                dt_append_u64(DART_NODE(), "apple,dart-dapf", start) ||
+                dt_append_u64(DART_NODE(), "apple,dart-dapf", end) ||
+                fdt_appendprop_u32(dt, DART_NODE(), "apple,dart-dapf", e[49] << 4 | e[50]) ||
+                fdt_appendprop_u32(dt, DART_NODE(), "apple,dart-dapf", r20))
+                return -1;
+            DART_NODE();
+        }
+    }
+
+    if (adt_getprop(adt, anode, "retention", NULL) &&
+        fdt_setprop_empty(dt, DART_NODE(), "apple,dart-retention"))
+        return -1;
+#undef DART_NODE
+    return 0;
+}
+
+static int dt_set_dart_s2r(void)
+{
+    int path[8];
+    int arm_io = adt_path_offset_trace(adt, "/arm-io", path);
+    int depth = 0;
+
+    if (arm_io < 0)
+        return 0;
+    while (path[depth])
+        depth++;
+
+    int anode = arm_io;
+    ADT_FOREACH_CHILD(adt, anode)
+    {
+        if (!adt_is_compatible(adt, anode, "dart,t8110") || !adt_getprop(adt, anode, "dart-id", NULL))
+            continue;
+        path[depth] = anode;
+        path[depth + 1] = 0;
+        u64 trad = 0;
+        if (dt_set_dart_s2r_one(anode, path, &trad))
+            bail("FDT: failed to set DART %llx S2R state\n", trad);
+    }
+    return 0;
+}
+
 static int dt_set_pmp(void)
 {
     int pmp_node = fdt_path_offset(dt, "pmp");
@@ -3037,6 +3256,10 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_multitouch())
         return -1;
     if (dt_set_sep())
+        return -1;
+    if (dt_set_apcie_s2r())
+        return -1;
+    if (dt_set_dart_s2r())
         return -1;
     if (dt_set_pmp())
         return -1;
