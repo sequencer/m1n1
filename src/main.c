@@ -23,6 +23,7 @@
 #include "sapt.h"
 #include "sep.h"
 #include "smp.h"
+#include "sysreg_probe.h"
 #include "string.h"
 #include "tps6598x.h"
 #include "uart.h"
@@ -196,7 +197,8 @@ void m1n1_main(void)
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
     nvme_shutdown();
-    exception_shutdown();
+    if (!sysreg_probe_enabled)
+        exception_shutdown();
 #ifndef BRINGUP
     usb_iodev_shutdown();
     display_shutdown(DCP_SLEEP_IF_EXTERNAL);
@@ -205,6 +207,10 @@ void m1n1_main(void)
 #endif
     mmu_shutdown();
 #endif
+    if (sysreg_probe_enabled) {
+        sysreg_probe_run();
+        exception_shutdown();
+    }
 
     printf("Vectoring to next stage...\n");
 

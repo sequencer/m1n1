@@ -172,7 +172,7 @@ OBJECTS := \
 	sep.o \
 	sio.o \
 	smc.o \
-	smp.o \
+	smp.o sysreg_probe.o \
 	spmi.o \
 	start.o \
 	startup.o \

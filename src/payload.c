@@ -4,6 +4,7 @@
 #include "../build/build_tag.h"
 
 #include "payload.h"
+#include "sysreg_probe.h"
 #include "adt.h"
 #include "assert.h"
 #include "chainload.h"
@@ -205,6 +206,8 @@ static bool check_var(u8 **p)
         mitigations_configure(val);
     } else if (IS_VAR("tso=")) {
         enable_tso = val[0] == '1';
+    } else if (IS_VAR("sysregprobe=")) {
+        sysreg_probe_enabled = val[0] == '1';
     } else {
         printf("Unknown variable %s\n", *p);
     }
