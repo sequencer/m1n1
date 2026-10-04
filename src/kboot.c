@@ -2470,6 +2470,42 @@ static int dt_set_sep(void)
         bail("ADT: could not get iboot manifest\n");
     fdt_setprop(dt, node, "iboot-manifest", (void *)phys_map[0], phys_map[1]);
 
+    /* Preserve the SEP startup policy selected by iBoot for this boot.
+     * ADT flag cells are native-endian; FDT flag cells are big-endian.
+     */
+    int chosen = fdt_path_offset(dt, "/chosen");
+    int adt_chosen = adt_path_offset(adt, "/chosen");
+    if (chosen < 0 || adt_chosen < 0)
+        bail("FDT/ADT: chosen not found for SEP\n");
+
+    const char *flags[] = {"protected-data-access", "sepfw-load-at-boot"};
+    for (unsigned int i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        u32 length;
+        const u32 *value = adt_getprop(adt, adt_chosen, flags[i], &length);
+        if (value) {
+            if (length != sizeof(*value))
+                bail("ADT: invalid chosen.%s length\n", flags[i]);
+            if (fdt_setprop_u32(dt, chosen, flags[i], *value))
+                bail("FDT: could not set chosen.%s\n", flags[i]);
+            chosen = fdt_path_offset(dt, "/chosen");
+        }
+    }
+    /* The xART gigalocker filename uses the machine's hardware UUID.
+     * Preserve the ADT unique-chip-id (8 bytes) and chip-id (4 bytes) as
+     * raw bytes: the host UUID input is their original byte representation,
+     * not FDT integer cells. The preboot UUID identifies the boot volume.
+     */
+    const char *identity[] = {"unique-chip-id", "chip-id", "apfs-preboot-uuid"};
+    for (unsigned int i = 0; i < sizeof(identity) / sizeof(identity[0]); i++) {
+        u32 length;
+        const void *value = adt_getprop(adt, adt_chosen, identity[i], &length);
+        if (value) {
+            if (fdt_setprop(dt, chosen, identity[i], value, length))
+                bail("FDT: could not set chosen.%s\n", identity[i]);
+            chosen = fdt_path_offset(dt, "/chosen");
+        }
+    }
+
     return 0;
 }
 
