@@ -3286,7 +3286,11 @@ int kboot_prepare_dt(void *fdt)
     dt_bufsize = fdt_totalsize(fdt);
     assert(dt_bufsize);
 
-    dt_bufsize += 6 * SZ_16K; // Add 96K of buffer for modifications
+    /*
+     * Room for modifications. T8132 adds GPU, SEP, MTP, DCP and ISP data; 96K
+     * ran out (FDT_ERR_NOSPACE on the ISP asc-firmware nodes).
+     */
+    dt_bufsize += 32 * SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
