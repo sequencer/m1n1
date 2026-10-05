@@ -42,6 +42,7 @@ u64 isp_iova_base(void)
     switch (chip_id) {
         case 0x6020 ... 0x6fff:
         case 0x8122:
+        case 0x8132:
             return 0x10000000000;
         default:
             return 0;
@@ -66,6 +67,22 @@ int isp_init(void)
     }
     if (node < 0)
         return 0;
+
+    /*
+     * T8132 (H16 ISP, macOS 27.0): the version read below only selects the
+     * heap top, and its power prerequisites on this SoC are not pinned down;
+     * a fault here would stop every boot. AppleH16CamIn places the heap at
+     * 0x1aec000..0x1b00000 after the preloaded segments
+     * (artifacts/driver-debug/isp-27/PARAMS.md in colmena-jiuyang).
+     */
+    if (chip_id == T8132) {
+        if (os_firmware.version != V27_0) {
+            printf("isp: unsupported firmware\n");
+            return -1;
+        }
+        heap_top = 0x1b00000;
+        goto segments;
+    }
 
     if (pmgr_adt_power_enable(isp_path) < 0)
         return -1;
@@ -170,6 +187,9 @@ int isp_init(void)
             return -1;
     }
 
+    pmgr_adt_power_disable(isp_path);
+
+segments:;
     const struct adt_segment_ranges *seg;
     u32 segments_len;
 
@@ -187,7 +207,5 @@ int isp_init(void)
     printf("isp: Heap: 0x%lx..0x%lx (0x%lx @ 0x%lx)\n", heap_iova, heap_top, heap_size, heap_phys);
 
     isp_initialized = true;
-
-    pmgr_adt_power_disable(isp_path);
     return err;
 }
