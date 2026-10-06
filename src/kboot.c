@@ -3374,6 +3374,13 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_reserve_asc_firmware("/arm-io/isp", "/arm-io/isp0", "isp", false, isp_iova_base()))
         return -1;
+    /*
+     * ANE (H16): iBoot pre-loads the firmware; its segment-ranges remap is
+     * the dart-ane SID 0 IOVA (0x10000000000 + VA) AppleH16ANEInterface maps
+     * it at (mapFwCTRRRegion).
+     */
+    if (dt_reserve_asc_firmware("/arm-io/ane", NULL, "ane", true, 0))
+        return -1;
     if (dt_set_isp_fwdata())
         return -1;
     if (dt_set_mtp())
