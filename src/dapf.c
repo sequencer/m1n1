@@ -6,6 +6,7 @@
 #include "malloc.h"
 #include "memory.h"
 #include "pmgr.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 
@@ -207,6 +208,17 @@ struct entry dapf_entries[] = {
     {"/arm-io/dart-ave", 3},     {NULL, -1},
 };
 
+/*
+ * On T8132 the kernel programs these on every power-up of the device's domain
+ * (apple-dart, from the apple,dart-dapf m1n1 attaches); m1n1 leaves the
+ * device powered off.
+ */
+static bool dapf_kernel_owned(const char *path)
+{
+    return chip_id == T8132 &&
+           (!strcmp(path, "/arm-io/dart-isp") || !strcmp(path, "/arm-io/dart-isp0"));
+}
+
 int dapf_init_all(void)
 {
     int ret = 0;
@@ -214,7 +226,8 @@ int dapf_init_all(void)
     struct entry *entry = dapf_entries;
 
     while (entry->path != NULL) {
-        if (adt_path_offset(adt, entry->path) < 0 || dapf_is_done(entry->path)) {
+        if (adt_path_offset(adt, entry->path) < 0 || dapf_is_done(entry->path) ||
+            dapf_kernel_owned(entry->path)) {
             entry++;
             continue;
         }

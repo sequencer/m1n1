@@ -81,12 +81,12 @@ int isp_init(void)
             return -1;
         }
         /*
-         * dapf_init_all programs the dart-isp DAPF (reg 5) later; the ISP
-         * must stay powered for that, as it did when this function left
-         * it on after "Unsupported SoC" (SError at 0x48e8d0004 otherwise).
+         * The ISP is not a boot dependency: hand it to the kernel powered
+         * off, as the other SoCs do after reading the version. Its DART's
+         * DAPF and tunables are programmed by the kernel on every ISP_SYS
+         * power-up (apple-dart), so dapf_init_all skips it here.
          */
-        if (pmgr_adt_power_enable(isp_path) < 0)
-            return -1;
+        pmgr_adt_power_disable(isp_path);
         heap_top = 0x1b00000;
         goto segments;
     }
