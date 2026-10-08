@@ -3381,6 +3381,12 @@ int kboot_prepare_dt(void *fdt)
      */
     if (dt_reserve_asc_firmware("/arm-io/ane", NULL, "ane", true, 0))
         return -1;
+    /*
+     * AVE (Pan): iBoot pre-loads AppleAVE2FW_H16G; its segment-ranges remap
+     * is the dart-ave SID 0 IOVA (0x10000000000 + VA) the IOP fetches from.
+     */
+    if (dt_reserve_asc_firmware("/arm-io/ave", NULL, "ave", true, 0))
+        return -1;
     if (dt_set_isp_fwdata())
         return -1;
     if (dt_set_mtp())
